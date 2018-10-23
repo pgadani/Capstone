@@ -1,3 +1,8 @@
+# Training Data Directories
+audio/
+cplskeleton_final/
+images/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
