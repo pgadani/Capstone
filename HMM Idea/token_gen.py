@@ -5,6 +5,8 @@ import numpy as np
 import os
 import pickle
 import time
+import sklearn
+from sklearn.cluster import KMeans
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
@@ -68,11 +70,22 @@ def load_audio(data_path, label='*', sample_time=.25, use_pickle=True):
 	return audio_samples
 
 
+def cluster_audio(audio_samples, n_clusters):
+	audio_features = np.array([np.ndarray.flatten(np.array(features)) for _, _, features in audio_samples])
+	print(audio_features.shape)
+	kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
+	clusters = kmeans.labels_
+	print(clusters)
+	means = {i: a for i, a in enumerate(kmeans.cluster_centers_)}
+	pickle.dump(clusters, open('pickles/audio_clusters.pkl', 'wb+'))
+	pickle.dump(means, open('pickles/audio_cluster_centers.pkl', 'wb+'))
+	return clusters, means
+
+
 def main():
-	# audio = load_audio('..', label='ballet')
+	audio_samples = load_audio('..', label='ballet')
+	clusters, means = cluster_audio(audio_samples, 32)
 	skeletons = load_skeletons('..', label='ballet')
-	for i in range(5):
-		print(skeletons.popitem())
 
 
 if __name__ == '__main__':
