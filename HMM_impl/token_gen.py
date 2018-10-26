@@ -36,11 +36,7 @@ class MotionToken:
 		return 'Filename: {} \t Person: {} \t Index: {} \t Motion Diff: {} \t Cluster: {}'.format(self.filename, self.person, self.index, self.motion_diff, self.cluster)
 
 
-def load_skeletons(data_path, label='*', use_pickle=True):
-	if use_pickle:
-		pickle_file = 'pickles/skeleton_{}.pkl'.format(label)
-		if os.path.exists(pickle_file):
-			return pickle.load(open(pickle_file, 'rb'))
+def load_skeletons(data_path, label='*'):
 	skeleton_dir = '{}/{}/{}/*'.format(data_path, 'cplskeleton_final', label)
 	skeletons = {}
 	for file in glob.glob(skeleton_dir):
@@ -60,10 +56,6 @@ def load_skeletons(data_path, label='*', use_pickle=True):
 				for position in data[1:]:
 					joint, x, y = position
 					skeleton[person][frame][joint] = (x, y)
-	if use_pickle:
-		pickle_file = 'pickles/skeleton_{}.pkl'.format(label)
-		with open(pickle_file, 'wb+') as f:
-			pickle.dump(skeletons, f)
 	return skeletons				
 
 
@@ -76,10 +68,20 @@ def generate_motion_tokens(skeletons):
 				new_pos = positions[i]
 				old_pos = positions[i - 1]
 				if new_pos and old_pos:
-					motion_diff = [[new_pos[joint][0] - old_pos[joint][0], new_pos[joint][1] - old_pos[joint][1]] for joint in JOINTS]
+					motion_diff = [new_pos[joint][i] - old_pos[joint][i] for joint in JOINTS for i in (0, 1)]
 					tokens.append(MotionToken(filename, person, i, motion_diff))
 	return tokens
 
+
+def cluster_motion(tokens, n_clusters):
+	motion_diffs = np.array([token.motion_diff for token in tokens])
+	kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
+	clusters = kmeans.labels_
+	print(clusters)
+	for token, label in zip(tokens, clusters):
+		token.cluster = label
+	means = {i: a for i, a in enumerate(kmeans.cluster_centers_)}
+	return clusters, means
 
 
 # returns a list of (source file, index, sample, features) tuples
@@ -143,9 +145,33 @@ def main(pickle_data=True, label='*', n_clusters=32):
 	# for i, (tr, to) in enumerate(zip(transitions, totals)):
 	# 	print(tr[i], to, tr[i]/to)
 
-	skeletons = load_skeletons('..', label='ballet')
-	tokens = generate_motion_tokens(skeletons)
-	print(tokens[0])
+	pickle_skeletons = 'pickles/skeleton_{}.pkl'.format(label)
+	pickle_motion_tok = 'pickles/motion_tokens_{}.pkl'.format(label)
+	skeletons = None
+	motion_tokens = None
+	if pickle_data:
+		if os.path.exists(pickle_skeletons):
+			with open(pickle_skeletons, 'rb') as f:
+				skeletons = pickle.load(f)
+		if os.path.exists(pickle_motion_tok):
+			with open(pickle_motion_tok, 'rb') as f:
+				motion_tokens = pickle.load(f)
+
+	if not skeletons:
+		skeletons = load_skeletons('..', label='ballet')
+		if pickle_data:
+			with open(pickle_skeletons, 'wb+') as f:
+				pickle.dump(skeletons, f)
+
+	if not motion_tokens:
+		motion_tokens = generate_motion_tokens(skeletons)
+		cluster_motion(motion_tokens, n_clusters)
+		if pickle_data:
+			with open(pickle_motion_tok, 'wb+') as f:
+				pickle.dump(motion_tokens, f)
+
+	for tok in motion_tokens:
+		print(tok.cluster)
 
 
 if __name__ == '__main__':
