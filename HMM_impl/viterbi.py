@@ -24,8 +24,8 @@ def viterbi(observations, transitions, emissions, priors=None):
 		# print(prev_state[states[i], i], states[i], i)
 		states[i-1] = prev_state[states[i], i]
 
-	print(ml_prob)
-	print(prev_state)
+	# print(ml_prob)
+	# print(prev_state)
 
 	return states
 

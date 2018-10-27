@@ -130,16 +130,16 @@ def probability_motion_from_audio(audio_samples_map, audio_clusters, motion_toke
 			transitions[sample.cluster, token.cluster] += 1
 	row_sums = transitions.sum(axis=1, keepdims=True)
 	probabilities = transitions / row_sums
-	for row in probabilities:
-		print(row)
+	# for row in probabilities:
+	# 	print(row)
 	return probabilities
 
 
 
-def main(pickle_data=True, label='*', n_clusters=32):
+def main(pickle_data=True, label='*', audio_clusters=48, motion_clusters=48):
 	rewrite = True
-	pickle_samples = 'pickles/audio_{}_{}.pkl'.format(label, n_clusters)
-	pickle_means = 'pickles/means_{}_{}.pkl'.format(label, n_clusters)
+	pickle_samples = 'pickles/audio_{}_{}.pkl'.format(label, audio_clusters)
+	pickle_means = 'pickles/means_{}_{}.pkl'.format(label, audio_clusters)
 	audio_samples = means = None
 	if pickle_data:
 		if os.path.exists(pickle_samples) and os.path.exists(pickle_means):
@@ -150,7 +150,7 @@ def main(pickle_data=True, label='*', n_clusters=32):
 			rewrite = False
 	if audio_samples is None or means is None:
 		audio_samples = load_audio('..', label=label)
-		clusters, means = cluster_audio(audio_samples, n_clusters)
+		clusters, means = cluster_audio(audio_samples, audio_clusters)
 		for sample, cluster in zip(audio_samples, clusters):
 			sample.cluster = cluster
 	if pickle_data and rewrite:
@@ -158,18 +158,17 @@ def main(pickle_data=True, label='*', n_clusters=32):
 			pickle.dump(audio_samples, f)
 		with open(pickle_means, 'wb+') as f:
 			pickle.dump(means, f)
-	transition_prob = np.zeros((n_clusters, n_clusters))
+	transition_prob = np.zeros((audio_clusters, audio_clusters))
 	for prev, curr in zip(audio_samples[:-1], audio_samples[1:]):
 		if prev.filename != curr.filename:
 			continue
 		transition_prob[prev.cluster][curr.cluster] += 1
-	print(transition_prob)
 	row_sums = transition_prob.sum(axis=1, keepdims=True)
 	transition_prob = transition_prob / row_sums
 
 
-	pickle_skeletons = 'pickles/skeleton_{}.pkl'.format(label)
-	pickle_motion_tok = 'pickles/motion_tokens_{}.pkl'.format(label)
+	pickle_skeletons = 'pickles/skeleton_{}_{}.pkl'.format(label, motion_clusters)
+	pickle_motion_tok = 'pickles/motion_tokens_{}_{}.pkl'.format(label, motion_clusters)
 	skeletons = None
 	motion_tokens = None
 	if pickle_data:
@@ -188,14 +187,21 @@ def main(pickle_data=True, label='*', n_clusters=32):
 
 	if not motion_tokens:
 		motion_tokens = generate_motion_tokens(skeletons)
-		cluster_motion(motion_tokens, n_clusters)
+		cluster_motion(motion_tokens, motion_clusters)
 		if pickle_data:
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
 
 
 	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
-	emission_prob = probability_motion_from_audio(audio_map, n_clusters, motion_tokens, n_clusters)
+	emission_prob = probability_motion_from_audio(audio_map, audio_clusters, motion_tokens, motion_clusters)
+
+	for row in transition_prob[:20,:]:
+		print(row)
+	# print()
+	# for row in emission_prob[:20,:]:
+	# 	print(row)
+
 
 	recon_tok = None
 	recon_audio = None
@@ -217,7 +223,7 @@ def main(pickle_data=True, label='*', n_clusters=32):
 
 	errors = 0
 	for i, cluster in enumerate(result):
-		print(cluster, expected_audio[i].cluster)
+		print(cluster, expected_audio[i].cluster, transition_prob[cluster])
 		if cluster != expected_audio[i].cluster:
 			errors += 1
 
@@ -225,7 +231,8 @@ def main(pickle_data=True, label='*', n_clusters=32):
 
 
 
+
 if __name__ == '__main__':
 	start_time = time.time()
-	main(pickle_data=True, label='ballet', n_clusters=48)
+	main(pickle_data=True, label='ballet')
 	print("This took {:4.2f}s".format(time.time()-start_time))
