@@ -8,6 +8,8 @@ import time
 import sklearn
 from sklearn.cluster import KMeans
 
+from viterbi import viterbi
+
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
@@ -22,6 +24,10 @@ class AudioSample:
 		self.raw = raw
 		self.features = features
 		self.cluster = cluster
+
+	def __str__(self):
+		return 'Filename: {} \t Index: {} \t Cluster: {}'.format(
+				self.filename, self.index, self.cluster)
 
 
 class MotionToken:
@@ -116,16 +122,17 @@ def cluster_audio(audio_samples, n_clusters):
 
 # Generates emission probability matrix
 # Probability of observing audio from state of motion
-def probability_motion_from_audio(audio_samples, audio_clusters, motion_tokens, motion_clusters):
+def probability_motion_from_audio(audio_samples_map, audio_clusters, motion_tokens, motion_clusters):
 	transitions = np.zeros((audio_clusters, motion_clusters))
-	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
 	for token in motion_tokens:
-		sample = audio_map[(token.filename, token.index)]
-		transitions[sample.cluster, token.cluster] += 1
+		if (token.filename, token.index) in audio_samples_map:
+			sample = audio_samples_map[(token.filename, token.index)]
+			transitions[sample.cluster, token.cluster] += 1
 	row_sums = transitions.sum(axis=1, keepdims=True)
-	print(transitions)
-	print(row_sums)
-	return transitions / row_sums
+	probabilities = transitions / row_sums
+	for row in probabilities:
+		print(row)
+	return probabilities
 
 
 
@@ -151,14 +158,14 @@ def main(pickle_data=True, label='*', n_clusters=32):
 			pickle.dump(audio_samples, f)
 		with open(pickle_means, 'wb+') as f:
 			pickle.dump(means, f)
-	transitions = np.zeros((n_clusters, n_clusters))
+	transition_prob = np.zeros((n_clusters, n_clusters))
 	for prev, curr in zip(audio_samples[:-1], audio_samples[1:]):
 		if prev.filename != curr.filename:
 			continue
-		transitions[prev.cluster][curr.cluster] += 1
-	print(transitions)
-	row_sums = transitions.sum(axis=1, keepdims=True)
-	print(transitions / row_sums)
+		transition_prob[prev.cluster][curr.cluster] += 1
+	print(transition_prob)
+	row_sums = transition_prob.sum(axis=1, keepdims=True)
+	transition_prob = transition_prob / row_sums
 
 
 	pickle_skeletons = 'pickles/skeleton_{}.pkl'.format(label)
@@ -186,7 +193,35 @@ def main(pickle_data=True, label='*', n_clusters=32):
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
 
-	transitions = probability_motion_from_audio(audio_samples, n_clusters, motion_tokens, n_clusters)
+
+	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
+	emission_prob = probability_motion_from_audio(audio_map, n_clusters, motion_tokens, n_clusters)
+
+	recon_tok = None
+	recon_audio = None
+	for token in motion_tokens:
+		if (token.filename, token.index) in audio_map:
+			recon_tok = token
+			recon_audio = audio_map[(token.filename, token.index)]
+
+	recon_motion = list(filter(lambda tok: tok.filename == recon_tok.filename and tok.person == recon_tok.person, motion_tokens))
+	recon_motion.sort(key=lambda tok: tok.index)
+
+	expected_audio = [audio_map[(tok.filename, tok.index)] for tok in recon_motion]
+
+	result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob)
+
+	for tok, samp in zip(recon_motion, expected_audio):
+		if tok.filename != samp.filename or tok.index != samp.index:
+			print("MISMATCHED", tok.filename, tok.index, samp.filename, samp.index)
+
+	errors = 0
+	for i, cluster in enumerate(result):
+		print(cluster, expected_audio[i].cluster)
+		if cluster != expected_audio[i].cluster:
+			errors += 1
+
+	print("ERROR: ", errors / len(result))
 
 
 

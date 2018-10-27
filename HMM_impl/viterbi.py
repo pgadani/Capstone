@@ -15,8 +15,8 @@ def viterbi(observations, transitions, emissions, priors=None):
 		# ml_prob[:, i] = np.max(ml_prob[:, i-1] * transitions.T * emissions[np.newaxis, :, observations[i]].T, axis=1)
 		# prev_state[:, i] = np.argmax(ml_prob[:, i-1] * transitions.T, axis=1)
 		for j in range(num_states):
-			ml_prob[j, i] = np.amax(ml_prob[:, i-1] * transitions[:, j] * B[j, observations[i]])
-			prev_state[j, i] = np.argmax(ml_prob[:, i-1] * transitions[:, j] * B[j, observations[i]])
+			ml_prob[j, i] = np.amax(ml_prob[:, i-1] * transitions[:, j] * emissions[j, observations[i]])
+			prev_state[j, i] = np.argmax(ml_prob[:, i-1] * transitions[:, j] * emissions[j, observations[i]])
 
 	states = np.zeros(num_obs, dtype=np.int)
 	states[-1] = np.argmax(ml_prob[:, -1])
