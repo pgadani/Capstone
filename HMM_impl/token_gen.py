@@ -4,11 +4,14 @@ import librosa
 import numpy as np
 import os
 import pickle
-import time
 import sklearn
+import time
+
+from seqlearn.hmm import MultinomialHMM
 from sklearn.cluster import KMeans
 
 from viterbi import viterbi
+
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
@@ -88,14 +91,11 @@ def generate_motion_tokens(skeletons):
 
 def cluster_motion(tokens, n_clusters):
 	motion_diffs = np.array([token.motion_diff for token in tokens])
-	print(tokens[0].filename, tokens[0].index, tokens[0].motion_diff)
 	kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
 	clusters = kmeans.labels_
-	print(clusters)
 	for token, label in zip(tokens, clusters):
 		token.cluster = label
-	means = {i: a for i, a in enumerate(kmeans.cluster_centers_)}
-	return clusters, means
+	return kmeans, clusters
 
 
 # returns a list of (source file, index, sample, features) tuples
@@ -124,19 +124,17 @@ def load_audio(data_path, label='*', sample_time=None):
 
 def cluster_audio(audio_samples, n_clusters):
 	audio_features = np.array([sample.features for sample in audio_samples])
-	print(audio_features.shape)
 	kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
 	clusters = kmeans.labels_
+	sequences = []
 	for sample, cluster in zip(audio_samples, clusters):
 		sample.cluster = cluster
-		print(sample)
-	means = {i: a for i, a in enumerate(kmeans.cluster_centers_)}
-	return clusters, means
+	return kmeans, clusters
 
 
 # Generates emission probability matrix
 # Probability of observing audio from state of motion
-def probability_motion_from_audio(audio_samples_map, audio_clusters, motion_tokens, motion_clusters):
+def emission_probability(audio_samples_map, audio_clusters, motion_tokens, motion_clusters):
 	transitions = np.zeros((audio_clusters, motion_clusters))
 	for token in motion_tokens:
 		if (token.filename, token.index) in audio_samples_map:
@@ -144,16 +142,23 @@ def probability_motion_from_audio(audio_samples_map, audio_clusters, motion_toke
 			transitions[sample.cluster, token.cluster] += 1
 	row_sums = transitions.sum(axis=1, keepdims=True)
 	probabilities = transitions / row_sums
-	# for row in probabilities:
-	# 	print(row)
 	return probabilities
 
+
+def transition_probability(audio_samples, audio_clusters):
+	transitions = np.zeros((audio_clusters, audio_clusters))
+	for prev, curr in zip(audio_samples[:-1], audio_samples[1:]):
+		if prev.filename != curr.filename:
+			continue
+		transitions[prev.cluster][curr.cluster] += 1
+	row_sums = transitions.sum(axis=1, keepdims=True)
+	probabilities = transitions / row_sums
+	return probabilities
 
 
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	rewrite = True
 	pickle_samples = 'pickles/audio_{}.pkl'.format(label)
-	# pickle_means = 'pickles/means_{}_{}.pkl'.format(label, audio_clusters)
 	audio_samples = means = None
 	if pickle_data:
 		if os.path.exists(pickle_samples):
@@ -165,17 +170,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	if pickle_data and rewrite:
 		with open(pickle_samples, 'wb+') as f:
 			pickle.dump(audio_samples, f)
-		# with open(pickle_means, 'wb+') as f:
-		# 	pickle.dump(means, f)
-	
-	cluster_audio(audio_samples, audio_clusters)
-	transition_prob = np.zeros((audio_clusters, audio_clusters))
-	for prev, curr in zip(audio_samples[:-1], audio_samples[1:]):
-		if prev.filename != curr.filename:
-			continue
-		transition_prob[prev.cluster][curr.cluster] += 1
-	row_sums = transition_prob.sum(axis=1, keepdims=True)
-	transition_prob = transition_prob / row_sums
 
 
 	pickle_skeletons = 'pickles/skeleton_{}.pkl'.format(label)
@@ -202,21 +196,46 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
 
-	cluster_motion(motion_tokens, motion_clusters)
+	audio_classifier, audio_labels = cluster_audio(audio_samples, audio_clusters)
+	motion_classifier, motion_labels = cluster_motion(motion_tokens, motion_clusters)
+
+	# print('AUDIO SAMPLES')
+	# for sample in audio_samples:
+	# 	print(sample)
 
 	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
-	emission_prob = probability_motion_from_audio(audio_map, audio_clusters, motion_tokens, motion_clusters)
 
-	print('TRANSITIONS')
-	for row in transition_prob[:20,:]:
-		print(row)
+	motion_tokens.sort(key=lambda tok: (tok.filename, tok.person, tok.index))
+	audio_labels_seq = []
+	motion_labels_seq = []
+	motion_tokens = list(filter(lambda tok: (tok.filename, tok.index) in audio_map, motion_tokens))
 
-	print('AUDIO SAMPLES')
-	for sample in audio_samples:
-		print(sample)
-	# print()
-	# for row in emission_prob[:20,:]:
-	# 	print(row)
+
+	# for tok in motion_tokens:
+	# 	print(tok)
+	motion_labels_seq = [tok.cluster for tok in motion_tokens]
+	audio_labels_seq = np.array([audio_map[(tok.filename, tok.index)].cluster for tok in motion_tokens])
+
+	sequence_lens = []
+	curr_len = 1
+	for prev, curr in zip(motion_tokens[:-1], motion_tokens[1:]):
+		if curr.filename != prev.filename or curr.person != prev.person or curr.index - prev.index != 1:
+			sequence_lens.append(curr_len)
+			curr_len = 0
+	sequence_lens.append(curr_len)
+
+	# Make an actual label binarizer object
+	motion_encoded = sklearn.preprocessing.label_binarize(motion_labels_seq, classes=list(range(motion_clusters)))
+
+	# transition_prob = transition_probability(audio_samples, audio_clusters)
+	# emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
+
+	print('MOTION ONE-HOT SHAPE', motion_encoded.shape)
+	print('AUDIO LABELS SHAPE', audio_labels_seq.shape)
+	print('SEQUENCE LENS SUM', sum(sequence_lens))
+
+	hmm = MultinomialHMM()
+	hmm.fit(motion_encoded, audio_labels_seq, sequence_lens)
 
 
 	all_samples = {(tok.filename, tok.index, tok.person) for tok in motion_tokens}
@@ -229,7 +248,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			if len(recon_samples) >= 10:
 				break
 
-	print(len(recon_samples))
 
 	for samp in recon_samples:
 		print(samp[0], samp[1])
@@ -238,7 +256,11 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 		expected_audio = [audio_map[(tok.filename, tok.index)] for tok in recon_motion]
 
-		result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob)
+		# result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob)
+		
+		recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
+
+		result = hmm.predict(recon_motion_encoded)
 
 		for tok, audio in zip(recon_motion, expected_audio):
 			if tok.filename != audio.filename or tok.index != audio.index:
