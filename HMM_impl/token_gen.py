@@ -2,6 +2,7 @@ import argparse
 import glob
 import json
 import librosa
+import math
 import numpy as np
 import os
 import pickle
@@ -9,7 +10,8 @@ import sklearn
 import time
 
 from seqlearn.hmm import MultinomialHMM
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, MeanShift, DBSCAN
+from sklearn.decomposition import PCA
 
 from viterbi import viterbi
 
@@ -20,13 +22,20 @@ FRAME_RATE = 30  # per second
 
 TOKEN_SIZE = 10 # frames per token
 
+MOTION_STRIDE = 1 # default is 1
+MOTION_LENGTH = 10 # default is TOKEN_SIZE // MOTION_STRIDE
+
 USE_MFCC = False
 
-N_CHROMA = 4 # default 12
-N_MFCC = 3 # default 20
-N_TEMPO = 5 # don't know default
+N_CHROMA = 12 # default 12
+N_MFCC = 20 # default 20
+N_TEMPO = 15 # don't know default
+
+N_MUSIC_CLUSTERS = 12
+N_MOTION_CLUSTERS = 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
+# JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
 
 
@@ -56,6 +65,14 @@ class MotionToken:
 				self.filename, self.person, self.index, self.cluster)
 
 
+def print_float_2d(arr, dec=2):
+	format_str = '{{:0.{}f}}'.format(dec)
+	for row in arr:
+		for val in row:
+			print(format_str.format(val), end=' ')
+		print()
+
+
 def load_skeletons(data_path, label='*'):
 	skeleton_dir = '{}/{}/{}/*'.format(data_path, 'cplskeleton_final', label)
 	skeletons = {}
@@ -79,26 +96,86 @@ def load_skeletons(data_path, label='*'):
 	return skeletons				
 
 
+def transform(point, offset, angle, scale):
+	new_point = [(p - o) / scale for p, o in zip(point, offset)]
+	new_point = [new_point[0] * math.cos(angle) - new_point[1] * math.sin(angle), new_point[1] * math.cos(angle) + new_point[0] * math.sin(angle)]
+	return new_point
+
+
+# def generate_motion_tokens(skeletons):
+# 	tokens = []
+# 	n_frames = min(TOKEN_SIZE, MOTION_STRIDE * MOTION_LENGTH)
+# 	for filename, skel in skeletons.items():
+# 		for person, positions in skel.items():
+# 			motion_diff = []
+# 			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - TOKEN_SIZE):
+# 				i = index * TOKEN_SIZE
+# 				has_all_positions = True
+# 				for k in range(0, n_frames + 1, MOTION_STRIDE):
+# 					if 'head' not in positions[i + k]:
+# 						has_all_positions = False
+# 						break
+# 				if has_all_positions:
+# 					offset = positions[i]['head']
+# 					diff = [positions[i]['head'][j] - positions[i]['neck'][j] for j in range(2)]
+# 					# angle = math.atan2(*diff)
+# 					angle = 0
+# 					scale = 1/math.sqrt(diff[0]**2 + diff[1]**2)
+# 					curr_skel = {}
+# 					next_skel = {}
+# 					for joint in JOINTS:
+# 						curr_skel[joint] = transform(positions[i][joint], offset, angle, scale)
+# 						next_skel[joint] = transform(positions[i + MOTION_STRIDE][joint], offset, angle, scale)
+# 					motion_diff = [positions[i + k + MOTION_STRIDE][joint][j] - positions[i + k][joint][j] for joint in JOINTS for j in (0, 1) for k in range(0, n_frames, MOTION_STRIDE)]
+# 					# print(len(motion_diff))
+# 					tokens.append(MotionToken(filename, person, index, motion_diff))
+# 	return tokens
+
 def generate_motion_tokens(skeletons):
 	tokens = []
+	n_frames = min(TOKEN_SIZE, MOTION_STRIDE * MOTION_LENGTH)
 	for filename, skel in skeletons.items():
 		for person, positions in skel.items():
 			motion_diff = []
 			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - TOKEN_SIZE):
 				i = index * TOKEN_SIZE
 				has_all_positions = True
-				for k in range(TOKEN_SIZE + 1):
+				for k in range(0, n_frames + 1, MOTION_STRIDE):
 					if 'head' not in positions[i + k]:
 						has_all_positions = False
-				if has_all_positions:
-					motion_diff = [positions[i + k + 1][joint][j] - positions[i + k][joint][j] for joint in JOINTS for j in (0, 1) for k in range(TOKEN_SIZE)]
-					tokens.append(MotionToken(filename, person, index, motion_diff))
+						break
+				if not has_all_positions:
+					break
+				offset = positions[i]['head']
+				diff = [positions[i]['head'][j] - positions[i]['neck'][j] for j in range(2)]
+				# angle = math.atan2(*diff)
+				angle = 0
+				scale = 1/math.sqrt(diff[0]**2 + diff[1]**2)
+				motion_features = []
+				for k in range(i, i + n_frames + 1 - MOTION_STRIDE, MOTION_STRIDE):
+					curr_skel = {}
+					next_skel = {}
+					for joint in JOINTS:
+						curr_skel[joint] = transform(positions[k][joint], offset, angle, scale)
+						next_skel[joint] = transform(positions[k + MOTION_STRIDE][joint], offset, angle, scale)
+						# current position
+						motion_features += [curr_skel[joint][j] for j in (0, 1)]
+						# next difference
+						# motion_features += [next_skel[joint][j] - curr_skel[joint][j] for j in (0, 1)]
+				tokens.append(MotionToken(filename, person, index, motion_features))
 	return tokens
 
 
 def cluster_motion(tokens, n_clusters):
+	global N_MOTION_CLUSTERS
 	motion_diffs = np.array([token.motion_diff for token in tokens])
-	kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
+	print(motion_diffs.shape)
+	pca = PCA(n_components=.9)
+	motion_diffs = pca.fit_transform(motion_diffs)
+	print(motion_diffs.shape)
+	kmeans = MeanShift().fit(motion_diffs)
+	N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
+	# kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
 	clusters = kmeans.labels_
 	for token, label in zip(tokens, clusters):
 		token.cluster = label
@@ -137,8 +214,15 @@ def load_audio(data_path, label='*', sample_time=None):
 
 # TODO MAYBE TRY SAMPLE WEIGHT???
 def cluster_audio(audio_samples, n_clusters):
+	global N_MUSIC_CLUSTERS
 	audio_features = np.array([sample.features for sample in audio_samples])
-	kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
+	print('audio', audio_features.shape)
+	pca = PCA(n_components=.9)
+	audio_features = pca.fit_transform(audio_features)
+	print(audio_features.shape)
+	kmeans = MeanShift().fit(audio_features)
+	N_MUSIC_CLUSTERS = len(kmeans.cluster_centers_)
+	# kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
 	clusters = kmeans.labels_
 	sequences = []
 	for sample, cluster in zip(audio_samples, clusters):
@@ -173,19 +257,6 @@ def transition_probability(audio_samples, audio_clusters):
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	rewrite = True
 	pickle_suffix = '{}'.format(label)
-	pickle_samples = 'pickles/audio_{}.pkl'.format(pickle_suffix)
-	audio_samples = means = None
-	if pickle_data:
-		if os.path.exists(pickle_samples):
-			with open(pickle_samples, 'rb') as f:
-				audio_samples = pickle.load(f)
-			rewrite = False
-	if audio_samples is None:
-		audio_samples = load_audio('..', label=label)
-	if pickle_data and rewrite:
-		with open(pickle_samples, 'wb+') as f:
-			pickle.dump(audio_samples, f)
-
 
 	pickle_skeletons = 'pickles/skeleton_{}.pkl'.format(pickle_suffix)
 	pickle_motion_tok = 'pickles/motion_tokens_{}.pkl'.format(pickle_suffix)
@@ -210,17 +281,36 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		if pickle_data:
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
+	
+	pickle_samples = 'pickles/audio_{}.pkl'.format(pickle_suffix)
+	audio_samples = means = None
+	if pickle_data:
+		if os.path.exists(pickle_samples):
+			with open(pickle_samples, 'rb') as f:
+				audio_samples = pickle.load(f)
+			rewrite = False
+	if audio_samples is None:
+		audio_samples = load_audio('..', label=label)
+	if pickle_data and rewrite:
+		with open(pickle_samples, 'wb+') as f:
+			pickle.dump(audio_samples, f)
+
 
 	audio_classifier, audio_labels = cluster_audio(audio_samples, audio_clusters)
 	motion_classifier, motion_labels = cluster_motion(motion_tokens, motion_clusters)
+	audio_clusters = N_MUSIC_CLUSTERS
+	motion_clusters = N_MOTION_CLUSTERS
 
 	audio_cluster_counts = np.zeros(audio_clusters)
 	for token in audio_samples:
 		audio_cluster_counts[token.cluster] += 1
+	motion_cluster_counts = np.zeros(motion_clusters)
+	for token in motion_tokens:
+		motion_cluster_counts[token.cluster] += 1
 
-	print('AUDIO SAMPLES')
-	for sample in audio_samples:
-		print(sample)
+	# print('AUDIO SAMPLES')
+	# for sample in audio_samples:
+	# 	print(sample)
 
 	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
 
@@ -277,11 +367,11 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		priors = np.zeros(audio_clusters)
 		priors[expected_audio[0].cluster] = 1
 
-		result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
+		# result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
 		
-		# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
+		recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
 
-		# result = hmm.predict(recon_motion_encoded)
+		result = hmm.predict(recon_motion_encoded)
 
 		for tok, audio in zip(recon_motion, expected_audio):
 			if tok.filename != audio.filename or tok.index != audio.index:
@@ -295,7 +385,17 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 		print("ERROR: ", errors / len(result))
 
-	print('Audio Cluster Counts', audio_cluster_counts)
+	print('Emissions:')
+	print_float_2d(emission_prob)
+	print('Transitions')
+	print_float_2d(transition_prob)
+	# for erow in emission_prob:
+	# 	for eprob in erow:
+	# 		print("{:0.2f}".format(eprob), end=' ')
+	# 	print()
+
+	print('Audio Clusters', audio_cluster_counts)
+	print('Motion Clusters', motion_cluster_counts)
 
 
 
@@ -304,5 +404,5 @@ if __name__ == '__main__':
 	# parser.add_argument('-p', '--pickle-data')
 	# print(parser.parse_args())
 	start_time = time.time()
-	main(pickle_data=True, label='swing')
+	main(pickle_data=False, label='swing', audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
 	print("This took {:4.2f}s".format(time.time()-start_time))
