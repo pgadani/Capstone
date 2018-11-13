@@ -9,6 +9,7 @@ import pickle
 import sklearn
 import time
 
+from matplotlib import pyplot as plt
 from seqlearn.hmm import MultinomialHMM
 from sklearn.cluster import KMeans, MeanShift, DBSCAN
 from sklearn.decomposition import PCA
@@ -27,9 +28,9 @@ MOTION_LENGTH = 10 # default is TOKEN_SIZE // MOTION_STRIDE
 
 USE_MFCC = False
 
-N_CHROMA = 12 # default 12
-N_MFCC = 20 # default 20
-N_TEMPO = 15 # don't know default
+N_CHROMA = 4 # default 12
+N_MFCC = 4 # default 20
+N_TEMPO = 3 # don't know default
 
 N_MUSIC_CLUSTERS = 12
 N_MOTION_CLUSTERS = 12
@@ -37,7 +38,11 @@ N_MOTION_CLUSTERS = 12
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
 # JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
-
+JOINTS_DISPLAY = ["head", "neck", \
+					"Rsho", "Relb", "Rwri", "Relb", "Rsho", "neck", \
+					"Lsho", "Lelb", "Lwri", "Lelb", "Lsho", "neck", \
+					"Rhip", "Rkne", "Rank", "Rkne", "Rhip", \
+					"Lhip", "Lkne", "Lank", "Lkne", "Lhip", "neck"]
 
 class AudioSample:
 	def __init__(self, filename, index, raw, features, cluster=None):
@@ -97,9 +102,10 @@ def load_skeletons(data_path, label='*'):
 
 
 def transform(point, offset, angle, scale):
-	new_point = [(p - o) / scale for p, o in zip(point, offset)]
+	new_point = [(p - o) * scale for p, o in zip(point, offset)]
 	new_point = [new_point[0] * math.cos(angle) - new_point[1] * math.sin(angle), new_point[1] * math.cos(angle) + new_point[0] * math.sin(angle)]
 	return new_point
+	# return point
 
 
 # def generate_motion_tokens(skeletons):
@@ -146,8 +152,9 @@ def generate_motion_tokens(skeletons):
 						break
 				if not has_all_positions:
 					break
-				offset = positions[i]['head']
-				diff = [positions[i]['head'][j] - positions[i]['neck'][j] for j in range(2)]
+				offset = positions[i]['neck'] # use the neck as the origin
+				# take Lhip + Rhip / 2 as the center of the hip, which should be unit 1 away
+				diff = [positions[i]['neck'][j] - positions[i]['Lhip'][j]/2 - positions[i]['Lhip'][j]/2 for j in range(2)]
 				# angle = math.atan2(*diff)
 				angle = 0
 				scale = 1/math.sqrt(diff[0]**2 + diff[1]**2)
@@ -157,11 +164,14 @@ def generate_motion_tokens(skeletons):
 					next_skel = {}
 					for joint in JOINTS:
 						curr_skel[joint] = transform(positions[k][joint], offset, angle, scale)
-						next_skel[joint] = transform(positions[k + MOTION_STRIDE][joint], offset, angle, scale)
+						# next_skel[joint] = transform(positions[k + MOTION_STRIDE][joint], offset, angle, scale)
 						# current position
 						motion_features += [curr_skel[joint][j] for j in (0, 1)]
-						# next difference
-						# motion_features += [next_skel[joint][j] - curr_skel[joint][j] for j in (0, 1)]
+					# for joint in JOINTS:
+					# 	curr_skel[joint] = transform(positions[k][joint], offset, angle, scale)
+					# 	next_skel[joint] = transform(positions[k + MOTION_STRIDE][joint], offset, angle, scale)
+					# 	# next difference
+					# 	motion_features += [next_skel[joint][j] - curr_skel[joint][j] for j in (0, 1)]
 				tokens.append(MotionToken(filename, person, index, motion_features))
 	return tokens
 
@@ -169,10 +179,11 @@ def generate_motion_tokens(skeletons):
 def cluster_motion(tokens, n_clusters):
 	global N_MOTION_CLUSTERS
 	motion_diffs = np.array([token.motion_diff for token in tokens])
-	print(motion_diffs.shape)
-	pca = PCA(n_components=.9)
-	motion_diffs = pca.fit_transform(motion_diffs)
-	print(motion_diffs.shape)
+	# print(motion_diffs.shape)
+	# pca = PCA(n_components=.9)
+	# motion_diffs = pca.fit_transform(motion_diffs)
+	# print(motion_diffs.shape)
+
 	kmeans = MeanShift().fit(motion_diffs)
 	N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
 	# kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
@@ -216,13 +227,14 @@ def load_audio(data_path, label='*', sample_time=None):
 def cluster_audio(audio_samples, n_clusters):
 	global N_MUSIC_CLUSTERS
 	audio_features = np.array([sample.features for sample in audio_samples])
-	print('audio', audio_features.shape)
-	pca = PCA(n_components=.9)
-	audio_features = pca.fit_transform(audio_features)
-	print(audio_features.shape)
-	kmeans = MeanShift().fit(audio_features)
-	N_MUSIC_CLUSTERS = len(kmeans.cluster_centers_)
-	# kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
+	# print('audio', audio_features.shape)
+	# pca = PCA(n_components=.9)
+	# audio_features = pca.fit_transform(audio_features)
+	# print(audio_features.shape)
+
+	# kmeans = MeanShift().fit(audio_features)
+	# N_MUSIC_CLUSTERS = len(kmeans.cluster_centers_)
+	kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
 	clusters = kmeans.labels_
 	sequences = []
 	for sample, cluster in zip(audio_samples, clusters):
@@ -254,6 +266,28 @@ def transition_probability(audio_samples, audio_clusters):
 	return probabilities
 
 
+def token_to_skel(token):
+	skeleton = {}
+	for i, j in enumerate(JOINTS):
+		skeleton[j] = token[2*i:2*i+2]
+	return skeleton
+
+
+def dist(p1, p2):
+	return ((p1[0] - p2[0])**2 + (p1[1] + p2[1])**2)**.5
+
+
+def draw_pose(skel, color='k'):
+	plt.plot(skel['head'][0], -skel['head'][1], 'o')
+	# head = plt.Circle((skel['head'][0], -skel['head'][1]), (skel['head'][0]**2 + skel['head'][1]**2)**.5, color=color)
+	# plt.gcf().gca().add_artist(head)
+	joints_show = JOINTS_DISPLAY
+	for j1, j2 in zip(joints_show[:-1], joints_show[1:]):
+		p1 = skel[j1]
+		p2 = skel[j2]
+		plt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color)
+
+
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	rewrite = True
 	pickle_suffix = '{}'.format(label)
@@ -281,6 +315,10 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		if pickle_data:
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
+
+	# for pose in motion_tokens[:5]:
+	# 	skeleton = token_to_skel(pose.motion_diff)
+	# 	show_pose(skeleton)
 	
 	pickle_samples = 'pickles/audio_{}.pkl'.format(pickle_suffix)
 	audio_samples = means = None
@@ -396,6 +434,27 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 	print('Audio Clusters', audio_cluster_counts)
 	print('Motion Clusters', motion_cluster_counts)
+
+	motion_centers = motion_classifier.cluster_centers_
+	fig_name = 'normalized_meanshift_hires'
+	max_draw = 50
+	for cluster in range(N_MOTION_CLUSTERS):
+		if motion_cluster_counts[cluster] < 10:
+			continue
+		plt.figure()
+		curr_draw = 0
+		for token in motion_tokens:
+			if token.cluster != cluster:
+				continue
+			if curr_draw >= max_draw:
+				break
+			curr_skel = token_to_skel(token.motion_diff)
+			draw_pose(curr_skel, color='b')
+			curr_draw += 1
+		cluster_skel = token_to_skel(motion_centers[cluster], color='r')
+		draw_pose(cluster_skel)
+		plt.show()
+		plt.close()
 
 
 
