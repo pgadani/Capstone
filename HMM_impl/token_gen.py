@@ -187,11 +187,11 @@ def generate_motion_tokens(skeletons):
 					for j1 in JOINTS:
 						for j2 in JOINTS:
 								motion_features += [s[j1][i] - n[j2][i] for i in range(2)]
-				for s in token_skels[1:]:
-					s0 = token_skels[0]
-					for j1 in JOINTS:
-						for j2 in JOINTS:
-								motion_features += [s[j1][i] - s0[j2][i] for i in range(2)]
+				# for s in token_skels[1:]:
+				# 	s0 = token_skels[0]
+				# 	for j1 in JOINTS:
+				# 		for j2 in JOINTS:
+				# 				motion_features += [s[j1][i] - s0[j2][i] for i in range(2)]
 				tokens.append(MotionToken(filename, person, index, token_skels[0], motion_features))
 	return tokens
 
@@ -201,16 +201,18 @@ def cluster_motion(tokens, n_clusters):
 	motion_diffs = np.array([token.motion_diff for token in tokens])
 	print(motion_diffs.shape)
 	motion_diffs = normalize(motion_diffs, norm='max')
-	pca = PCA(n_components=.9)
+	pca = PCA(n_components=.95)
 	motion_diffs = pca.fit_transform(motion_diffs)
-	# print(motion_diffs.shape)
+	print(motion_diffs.shape)
 
-	# default bandwidth around 32
-	kmeans = MeanShift(cluster_all=False).fit(motion_diffs)
-	print(kmeans.get_params())
-	print(estimate_bandwidth(motion_diffs))
-	N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
-	# kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
+	# # default bandwidth around 32
+	# kmeans = MeanShift(cluster_all=False).fit(motion_diffs)
+	# print(kmeans.get_params())
+	# print(estimate_bandwidth(motion_diffs))
+	# N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
+
+	kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
+
 	clusters = kmeans.labels_
 	for token, label in zip(tokens, clusters):
 		token.cluster = label
@@ -399,6 +401,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	motion_encoded = sklearn.preprocessing.label_binarize(motion_labels_seq, classes=list(range(motion_clusters)))
 
 	transition_prob = transition_probability(audio_samples, audio_clusters)
+	motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
 	emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
 
 	print('MOTION ONE-HOT SHAPE', motion_encoded.shape)
@@ -420,37 +423,39 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 				break
 
 
-	# for samp in recon_samples:
-	# 	print(samp[0], samp[1])
-	# 	recon_motion = list(filter(lambda tok: tok.filename == samp[0] and tok.person == samp[2], motion_tokens))
-	# 	recon_motion.sort(key=lambda tok: tok.index)
+	for samp in recon_samples:
+		print(samp[0], samp[1])
+		recon_motion = list(filter(lambda tok: tok.filename == samp[0] and tok.person == samp[2], motion_tokens))
+		recon_motion.sort(key=lambda tok: tok.index)
 
-	# 	expected_audio = [audio_map[(tok.filename, tok.index)] for tok in recon_motion]
-	# 	priors = np.zeros(audio_clusters)
-	# 	priors[expected_audio[0].cluster] = 1
+		expected_audio = [audio_map[(tok.filename, tok.index)] for tok in recon_motion]
+		priors = np.zeros(audio_clusters)
+		priors[expected_audio[0].cluster] = 1
 
-	# 	# result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
+		result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
 		
-	# 	recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
+		# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
 
-	# 	result = hmm.predict(recon_motion_encoded)
+		# result = hmm.predict(recon_motion_encoded)
 
-	# 	for tok, audio in zip(recon_motion, expected_audio):
-	# 		if tok.filename != audio.filename or tok.index != audio.index:
-	# 			print("MISMATCHED", tok.filename, tok.index, audio.filename, audio.index)
+		for tok, audio in zip(recon_motion, expected_audio):
+			if tok.filename != audio.filename or tok.index != audio.index:
+				print("MISMATCHED", tok.filename, tok.index, audio.filename, audio.index)
 
-	# 	errors = 0
-	# 	for i, cluster in enumerate(result):
-	# 		print('{}\t{}\t{}'.format(recon_motion[i].cluster, expected_audio[i].cluster, cluster))
-	# 		if cluster != expected_audio[i].cluster:
-	# 			errors += 1
+		errors = 0
+		for i, cluster in enumerate(result):
+			print('{}\t{}\t{}'.format(recon_motion[i].cluster, expected_audio[i].cluster, cluster))
+			if cluster != expected_audio[i].cluster:
+				errors += 1
 
-	# 	print("ERROR: ", errors / len(result))
+		print("ERROR: ", errors / len(result))
 
-	# print('Emissions:')
-	# print_float_2d(emission_prob)
-	# print('Transitions')
-	# print_float_2d(transition_prob)
+	print('Emissions:')
+	print_float_2d(emission_prob)
+	print('Transitions')
+	print_float_2d(transition_prob)
+	print('Motion Transitions')
+	print_float_2d(motion_transition_prob)
 	# for erow in emission_prob:
 	# 	for eprob in erow:
 	# 		print("{:0.2f}".format(eprob), end=' ')
@@ -460,15 +465,15 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	print('Motion Clusters', motion_cluster_counts)
 
 	motion_centers = motion_classifier.cluster_centers_
-	fig_name = 'norm_ms_30bandwidth'
+	fig_name = 'norm_knn_nbnn_posemotion2'
 	max_draw = 50
 	for cluster, center in enumerate(motion_centers):
 		if cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
 			cluster = -1
 		if motion_cluster_counts[cluster] < 10:
 			continue
-		plt.figure()
 		curr_draw = 0
+		plt.figure()
 		for token in motion_tokens:
 			if token.cluster != cluster:
 				continue
@@ -481,6 +486,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		# cluster_skel = token_to_skel(center)
 		cluster_skels = [m.skel for m in motion_tokens if m.cluster == cluster]
 		if len(cluster_skels) == 0:
+			plt.close()
 			continue
 		cluster_skel = {}
 		for joint in JOINTS:
