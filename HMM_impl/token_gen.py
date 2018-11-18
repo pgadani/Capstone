@@ -6,6 +6,7 @@ import math
 import numpy as np
 import os
 import pickle
+import random
 import sklearn
 import time
 
@@ -39,13 +40,14 @@ N_MUSIC_CLUSTERS = 12
 N_MOTION_CLUSTERS = 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
-# JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
 JOINTS_DISPLAY = ["head", "neck", \
 					"Rsho", "Relb", "Rwri", "Relb", "Rsho", "neck", \
 					"Lsho", "Lelb", "Lwri", "Lelb", "Lsho", "neck", \
 					"Rhip", "Rkne", "Rank", "Rkne", "Rhip", \
 					"Lhip", "Lkne", "Lank", "Lkne", "Lhip", "neck"]
+
+NUM_TOK_TO_SHOW = 5
 
 class AudioSample:
 	def __init__(self, filename, index, raw, features, cluster=None):
@@ -61,11 +63,11 @@ class AudioSample:
 
 
 class MotionToken:
-	def __init__(self, filename, person, index, skel, features, cluster=None):
+	def __init__(self, filename, person, index, skeletons, features, cluster=None):
 		self.filename = filename
 		self.person = person
 		self.index = index
-		self.skel = skel
+		self.skeletons = skeletons
 		self.features = features
 		self.cluster = cluster
 
@@ -109,37 +111,7 @@ def transform(point, offset, angle, scale):
 	new_point = [(p - o) * scale for p, o in zip(point, offset)]
 	new_point = [new_point[0] * math.cos(angle) - new_point[1] * math.sin(angle), new_point[1] * math.cos(angle) + new_point[0] * math.sin(angle)]
 	return new_point
-	# return point
 
-
-# def generate_motion_tokens(skeletons):
-# 	tokens = []
-# 	n_frames = min(TOKEN_SIZE, MOTION_STRIDE * MOTION_LENGTH)
-# 	for filename, skel in skeletons.items():
-# 		for person, positions in skel.items():
-# 			features = []
-# 			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - TOKEN_SIZE):
-# 				i = index * TOKEN_SIZE
-# 				has_all_positions = True
-# 				for k in range(0, n_frames + 1, MOTION_STRIDE):
-# 					if 'head' not in positions[i + k]:
-# 						has_all_positions = False
-# 						break
-# 				if has_all_positions:
-# 					offset = positions[i]['head']
-# 					diff = [positions[i]['head'][j] - positions[i]['neck'][j] for j in range(2)]
-# 					# angle = math.atan2(*diff)
-# 					angle = 0
-# 					scale = 1/math.sqrt(diff[0]**2 + diff[1]**2)
-# 					curr_skel = {}
-# 					next_skel = {}
-# 					for joint in JOINTS:
-# 						curr_skel[joint] = transform(positions[i][joint], offset, angle, scale)
-# 						next_skel[joint] = transform(positions[i + MOTION_STRIDE][joint], offset, angle, scale)
-# 					features = [positions[i + k + MOTION_STRIDE][joint][j] - positions[i + k][joint][j] for joint in JOINTS for j in (0, 1) for k in range(0, n_frames, MOTION_STRIDE)]
-# 					# print(len(features))
-# 					tokens.append(MotionToken(filename, person, index, features))
-# 	return tokens
 
 def generate_motion_tokens(skeletons):
 	tokens = []
@@ -156,29 +128,22 @@ def generate_motion_tokens(skeletons):
 						break
 				if not has_all_positions:
 					break
-				# offset = positions[i]['neck'] # use the neck as the origin
+				# use center of hips as origin
 				offset = [positions[i]['Lhip'][j]/2 + positions[i]['Rhip'][j]/2 for j in range(2)]
-				# take Lhip + Rhip / 2 as the center of the hip, which should be unit 1 away
-				diff = [positions[i]['neck'][j] - positions[i]['Lhip'][j]/2 - positions[i]['Rhip'][j]/2 for j in range(2)]
+				# scale based on neck being one unit away
+				diff = [positions[i]['neck'][j] - offset[j] for j in range(2)]
+				# not messing with angle for now
 				# angle = math.atan2(*diff)
 				angle = 0
 				scale = 1/math.sqrt(diff[0]**2 + diff[1]**2)
 				motion_features = []
 				token_skels = []
 				for k in range(i, i + n_frames + 1 - MOTION_STRIDE, MOTION_STRIDE):
-				# for k in range(i, i+MOTION_STRIDE, MOTION_STRIDE):
 					curr_skel = {}
 					next_skel = {}
 					for joint in JOINTS:
 						curr_skel[joint] = transform(positions[k][joint], offset, angle, scale)
-						# current position
-						# motion_features += [curr_skel[joint][j] for j in (0, 1)]
 					token_skels.append(curr_skel)
-					# for joint in JOINTS:
-					# 	curr_skel[joint] = transform(positions[k][joint], offset, angle, scale)
-					# 	next_skel[joint] = transform(positions[k + MOTION_STRIDE][joint], offset, angle, scale)
-					# 	# next difference
-					# 	motion_features += [next_skel[joint][j] - curr_skel[joint][j] for j in (0, 1)]
 				for s in token_skels:
 					for j1 in JOINTS:
 						for j2 in JOINTS:
@@ -305,15 +270,21 @@ def dist(p1, p2):
 	return ((p1[0] - p2[0])**2 + (p1[1] + p2[1])**2)**.5
 
 
-def draw_pose(skel, color='k'):
-	plt.plot(skel['head'][0], -skel['head'][1], 'o')
+def draw_pose(skel, color='k', subplt=None):
+	if subplt:
+		subplt.plot(skel['head'][0], -skel['head'][1], 'o')
+	else:
+		plt.plot(skel['head'][0], -skel['head'][1], 'o')
 	# head = plt.Circle((skel['head'][0], -skel['head'][1]), (skel['head'][0]**2 + skel['head'][1]**2)**.5, color=color)
 	# plt.gcf().gca().add_artist(head)
 	joints_show = JOINTS_DISPLAY
 	for j1, j2 in zip(joints_show[:-1], joints_show[1:]):
 		p1 = skel[j1]
 		p2 = skel[j2]
-		plt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color)
+		if subplt:
+			subplt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color)
+		else:
+			plt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color)
 
 
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
@@ -481,12 +452,13 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 				continue
 			if curr_draw >= max_draw:
 				break
-			# curr_skel = token_to_skel(token.features)
-			curr_skel = token.skel
+			# curr_skel = token_to_skel(token.motion_diff)
+			curr_skel = token.skeletons[0]
 			draw_pose(curr_skel, color='b')
 			curr_draw += 1
 		# cluster_skel = token_to_skel(center)
-		cluster_skels = [m.skel for m in motion_tokens if m.cluster == cluster]
+		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
+		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
 		if len(cluster_skels) == 0:
 			plt.close()
 			continue
@@ -494,11 +466,24 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		for joint in JOINTS:
 			cluster_skel[joint] = (sum([s[joint][0] for s in cluster_skels])/len(cluster_skels), sum([s[joint][1] for s in cluster_skels])/len(cluster_skels))
 		draw_pose(cluster_skel, color='r')
+
 		if not os.path.exists('skeletons/{}'.format(fig_name)):
 			os.makedirs('skeletons/{}'.format(fig_name))
 		plt.savefig('skeletons/{}/{}_{}count.png'.format(fig_name, cluster, motion_cluster_counts[cluster]))
 		plt.show()
 		plt.close()
+
+		fig, ax = plt.subplots(nrows=NUM_TOK_TO_SHOW, ncols=MOTION_LENGTH)
+		show_tokens = random.sample(cluster_tokens, NUM_TOK_TO_SHOW);
+		for tok_ind, row in enumerate(ax):
+			for pos_ind, col in enumerate(row):
+				skel = show_tokens[tok_ind].skeletons[pos_ind]
+				draw_pose(skel, subplt=col)
+		plt.savefig('skeletons/{}/sample_motion_{}_{}count.png'.format(fig_name, cluster, motion_cluster_counts[cluster]))
+		plt.show()
+		plt.close()
+
+
 
 
 
@@ -507,5 +492,5 @@ if __name__ == '__main__':
 	# parser.add_argument('-p', '--pickle-data')
 	# print(parser.parse_args())
 	start_time = time.time()
-	main(pickle_data=False, label=LABEL, audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
+	main(pickle_data=True, label=LABEL, audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
 	print("This took {:4.2f}s".format(time.time()-start_time))
