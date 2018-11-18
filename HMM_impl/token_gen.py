@@ -164,7 +164,6 @@ def generate_motion_tokens(skeletons):
 
 
 def cluster_motion(tokens, n_clusters):
-	global N_MOTION_CLUSTERS
 	featuress = np.array([token.features for token in tokens])
 	print(featuress.shape)
 	featuress = normalize(featuress, norm='max')
@@ -176,14 +175,14 @@ def cluster_motion(tokens, n_clusters):
 	# kmeans = MeanShift(cluster_all=False).fit(featuress)
 	# print(kmeans.get_params())
 	# print(estimate_bandwidth(featuress))
-	# N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
+	# n_clusters = len(kmeans.cluster_centers_)
 
 	kmeans = KMeans(n_clusters=n_clusters).fit(featuress)
 
 	clusters = kmeans.labels_
 	for token, label in zip(tokens, clusters):
 		token.cluster = label
-	return kmeans, clusters
+	return kmeans, clusters, n_clusters
 
 
 # returns a list of (source file, index, sample, features) tuples
@@ -218,7 +217,6 @@ def load_audio(data_path, label='*', sample_time=None):
 
 # TODO MAYBE TRY SAMPLE WEIGHT???
 def cluster_audio(audio_samples, n_clusters):
-	global N_MUSIC_CLUSTERS
 	audio_features = np.array([sample.features for sample in audio_samples])
 	# print('audio', audio_features.shape)
 	# pca = PCA(n_components=.9)
@@ -226,13 +224,13 @@ def cluster_audio(audio_samples, n_clusters):
 	# print(audio_features.shape)
 
 	# kmeans = MeanShift().fit(audio_features)
-	# N_MUSIC_CLUSTERS = len(kmeans.cluster_centers_)
+	# n_clusters = len(kmeans.cluster_centers_)
 	kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
 	clusters = kmeans.labels_
 	sequences = []
 	for sample, cluster in zip(audio_samples, clusters):
 		sample.cluster = cluster
-	return kmeans, clusters
+	return kmeans, clusters, n_clusters
 
 
 # Generates emission probability matrix
@@ -333,10 +331,8 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			pickle.dump(audio_samples, f)
 
 
-	audio_classifier, audio_labels = cluster_audio(audio_samples, audio_clusters)
-	motion_classifier, motion_labels = cluster_motion(motion_tokens, motion_clusters)
-	audio_clusters = N_MUSIC_CLUSTERS
-	motion_clusters = N_MOTION_CLUSTERS
+	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_samples, audio_clusters)
+	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_clusters)
 
 	audio_cluster_counts = np.zeros(audio_clusters)
 	for token in audio_samples:
@@ -492,5 +488,5 @@ if __name__ == '__main__':
 	# parser.add_argument('-p', '--pickle-data')
 	# print(parser.parse_args())
 	start_time = time.time()
-	main(pickle_data=True, label=LABEL, audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
+	main(pickle_data=False, label=LABEL, audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
 	print("This took {:4.2f}s".format(time.time()-start_time))
