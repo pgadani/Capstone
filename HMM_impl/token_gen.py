@@ -18,6 +18,8 @@ from sklearn.preprocessing import normalize
 from viterbi import viterbi
 
 
+LABEL = 'swing'
+
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
@@ -59,12 +61,12 @@ class AudioSample:
 
 
 class MotionToken:
-	def __init__(self, filename, person, index, skel, motion_diff, cluster=None):
+	def __init__(self, filename, person, index, skel, features, cluster=None):
 		self.filename = filename
 		self.person = person
 		self.index = index
 		self.skel = skel
-		self.motion_diff = motion_diff
+		self.features = features
 		self.cluster = cluster
 
 	def __str__(self):
@@ -100,7 +102,7 @@ def load_skeletons(data_path, label='*'):
 				for position in data[1:]:
 					joint, x, y = position
 					skeleton[person][frame][joint] = (x, y)
-	return skeletons				
+	return skeletons
 
 
 def transform(point, offset, angle, scale):
@@ -115,7 +117,7 @@ def transform(point, offset, angle, scale):
 # 	n_frames = min(TOKEN_SIZE, MOTION_STRIDE * MOTION_LENGTH)
 # 	for filename, skel in skeletons.items():
 # 		for person, positions in skel.items():
-# 			motion_diff = []
+# 			features = []
 # 			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - TOKEN_SIZE):
 # 				i = index * TOKEN_SIZE
 # 				has_all_positions = True
@@ -134,9 +136,9 @@ def transform(point, offset, angle, scale):
 # 					for joint in JOINTS:
 # 						curr_skel[joint] = transform(positions[i][joint], offset, angle, scale)
 # 						next_skel[joint] = transform(positions[i + MOTION_STRIDE][joint], offset, angle, scale)
-# 					motion_diff = [positions[i + k + MOTION_STRIDE][joint][j] - positions[i + k][joint][j] for joint in JOINTS for j in (0, 1) for k in range(0, n_frames, MOTION_STRIDE)]
-# 					# print(len(motion_diff))
-# 					tokens.append(MotionToken(filename, person, index, motion_diff))
+# 					features = [positions[i + k + MOTION_STRIDE][joint][j] - positions[i + k][joint][j] for joint in JOINTS for j in (0, 1) for k in range(0, n_frames, MOTION_STRIDE)]
+# 					# print(len(features))
+# 					tokens.append(MotionToken(filename, person, index, features))
 # 	return tokens
 
 def generate_motion_tokens(skeletons):
@@ -144,7 +146,7 @@ def generate_motion_tokens(skeletons):
 	n_frames = min(TOKEN_SIZE, MOTION_STRIDE * MOTION_LENGTH)
 	for filename, skel in skeletons.items():
 		for person, positions in skel.items():
-			motion_diff = []
+			features = []
 			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - TOKEN_SIZE):
 				i = index * TOKEN_SIZE
 				has_all_positions = True
@@ -198,20 +200,20 @@ def generate_motion_tokens(skeletons):
 
 def cluster_motion(tokens, n_clusters):
 	global N_MOTION_CLUSTERS
-	motion_diffs = np.array([token.motion_diff for token in tokens])
-	print(motion_diffs.shape)
-	motion_diffs = normalize(motion_diffs, norm='max')
+	featuress = np.array([token.features for token in tokens])
+	print(featuress.shape)
+	featuress = normalize(featuress, norm='max')
 	pca = PCA(n_components=.95)
-	motion_diffs = pca.fit_transform(motion_diffs)
-	print(motion_diffs.shape)
+	featuress = pca.fit_transform(featuress)
+	print(featuress.shape)
 
 	# # default bandwidth around 32
-	# kmeans = MeanShift(cluster_all=False).fit(motion_diffs)
+	# kmeans = MeanShift(cluster_all=False).fit(featuress)
 	# print(kmeans.get_params())
-	# print(estimate_bandwidth(motion_diffs))
+	# print(estimate_bandwidth(featuress))
 	# N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
 
-	kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
+	kmeans = KMeans(n_clusters=n_clusters).fit(featuress)
 
 	clusters = kmeans.labels_
 	for token, label in zip(tokens, clusters):
@@ -343,9 +345,9 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 				pickle.dump(motion_tokens, f)
 
 	# for pose in motion_tokens[:5]:
-	# 	skeleton = token_to_skel(pose.motion_diff)
+	# 	skeleton = token_to_skel(pose.features)
 	# 	show_pose(skeleton)
-	
+
 	pickle_samples = 'pickles/audio_{}.pkl'.format(pickle_suffix)
 	audio_samples = means = None
 	if pickle_data:
@@ -433,7 +435,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		priors[expected_audio[0].cluster] = 1
 
 		result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
-		
+
 		# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
 
 		# result = hmm.predict(recon_motion_encoded)
@@ -479,7 +481,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 				continue
 			if curr_draw >= max_draw:
 				break
-			# curr_skel = token_to_skel(token.motion_diff)
+			# curr_skel = token_to_skel(token.features)
 			curr_skel = token.skel
 			draw_pose(curr_skel, color='b')
 			curr_draw += 1
@@ -505,5 +507,5 @@ if __name__ == '__main__':
 	# parser.add_argument('-p', '--pickle-data')
 	# print(parser.parse_args())
 	start_time = time.time()
-	main(pickle_data=False, label='swing', audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
+	main(pickle_data=False, label=LABEL, audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
 	print("This took {:4.2f}s".format(time.time()-start_time))
