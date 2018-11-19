@@ -19,6 +19,8 @@ from sklearn.preprocessing import normalize
 from viterbi import viterbi
 
 
+LABEL = 'swing'
+
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
@@ -61,12 +63,12 @@ class AudioSample:
 
 
 class MotionToken:
-	def __init__(self, filename, person, index, skeletons, motion_diff, cluster=None):
+	def __init__(self, filename, person, index, skeletons, features, cluster=None):
 		self.filename = filename
 		self.person = person
 		self.index = index
 		self.skeletons = skeletons
-		self.motion_diff = motion_diff
+		self.features = features
 		self.cluster = cluster
 
 	def __str__(self):
@@ -102,7 +104,7 @@ def load_skeletons(data_path, label='*'):
 				for position in data[1:]:
 					joint, x, y = position
 					skeleton[person][frame][joint] = (x, y)
-	return skeletons				
+	return skeletons
 
 
 def transform(point, offset, angle, scale):
@@ -161,26 +163,25 @@ def generate_motion_tokens(skeletons):
 
 
 def cluster_motion(tokens, n_clusters):
-	global N_MOTION_CLUSTERS
-	motion_diffs = np.array([token.motion_diff for token in tokens])
-	print(motion_diffs.shape)
-	motion_diffs = normalize(motion_diffs, norm='max')
+	featuress = np.array([token.features for token in tokens])
+	print(featuress.shape)
+	featuress = normalize(featuress, norm='max')
 	pca = PCA(n_components=.95)
-	motion_diffs = pca.fit_transform(motion_diffs)
-	print(motion_diffs.shape)
+	featuress = pca.fit_transform(featuress)
+	print(featuress.shape)
 
 	# # default bandwidth around 32
-	# kmeans = MeanShift(cluster_all=False).fit(motion_diffs)
+	# kmeans = MeanShift(cluster_all=False).fit(featuress)
 	# print(kmeans.get_params())
-	# print(estimate_bandwidth(motion_diffs))
-	# N_MOTION_CLUSTERS = len(kmeans.cluster_centers_)
+	# print(estimate_bandwidth(featuress))
+	# n_clusters = len(kmeans.cluster_centers_)
 
-	kmeans = KMeans(n_clusters=n_clusters).fit(motion_diffs)
+	kmeans = KMeans(n_clusters=n_clusters).fit(featuress)
 
 	clusters = kmeans.labels_
 	for token, label in zip(tokens, clusters):
 		token.cluster = label
-	return kmeans, clusters
+	return kmeans, clusters, n_clusters
 
 
 # returns a list of (source file, index, sample, features) tuples
@@ -215,7 +216,6 @@ def load_audio(data_path, label='*', sample_time=None):
 
 # TODO MAYBE TRY SAMPLE WEIGHT???
 def cluster_audio(audio_samples, n_clusters):
-	global N_MUSIC_CLUSTERS
 	audio_features = np.array([sample.features for sample in audio_samples])
 	# print('audio', audio_features.shape)
 	# pca = PCA(n_components=.9)
@@ -223,13 +223,13 @@ def cluster_audio(audio_samples, n_clusters):
 	# print(audio_features.shape)
 
 	# kmeans = MeanShift().fit(audio_features)
-	# N_MUSIC_CLUSTERS = len(kmeans.cluster_centers_)
+	# n_clusters = len(kmeans.cluster_centers_)
 	kmeans = KMeans(n_clusters=n_clusters).fit(audio_features)
 	clusters = kmeans.labels_
 	sequences = []
 	for sample, cluster in zip(audio_samples, clusters):
 		sample.cluster = cluster
-	return kmeans, clusters
+	return kmeans, clusters, n_clusters
 
 
 # Generates emission probability matrix
@@ -314,9 +314,9 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 				pickle.dump(motion_tokens, f)
 
 	# for pose in motion_tokens[:5]:
-	# 	skeleton = token_to_skel(pose.motion_diff)
+	# 	skeleton = token_to_skel(pose.features)
 	# 	show_pose(skeleton)
-	
+
 	pickle_samples = 'pickles/audio_{}.pkl'.format(pickle_suffix)
 	audio_samples = means = None
 	if pickle_data:
@@ -331,10 +331,8 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			pickle.dump(audio_samples, f)
 
 
-	audio_classifier, audio_labels = cluster_audio(audio_samples, audio_clusters)
-	motion_classifier, motion_labels = cluster_motion(motion_tokens, motion_clusters)
-	audio_clusters = N_MUSIC_CLUSTERS
-	motion_clusters = N_MOTION_CLUSTERS
+	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_samples, audio_clusters)
+	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_clusters)
 
 	audio_cluster_counts = np.zeros(audio_clusters)
 	for token in audio_samples:
@@ -404,7 +402,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		priors[expected_audio[0].cluster] = 1
 
 		result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
-		
+
 		# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
 
 		# result = hmm.predict(recon_motion_encoded)
@@ -465,7 +463,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		for joint in JOINTS:
 			cluster_skel[joint] = (sum([s[joint][0] for s in cluster_skels])/len(cluster_skels), sum([s[joint][1] for s in cluster_skels])/len(cluster_skels))
 		draw_pose(cluster_skel, color='r')
-		
+
 		if not os.path.exists('skeletons/{}'.format(fig_name)):
 			os.makedirs('skeletons/{}'.format(fig_name))
 		plt.savefig('skeletons/{}/{}_{}count.png'.format(fig_name, cluster, motion_cluster_counts[cluster]))
@@ -492,5 +490,5 @@ if __name__ == '__main__':
 	# parser.add_argument('-p', '--pickle-data')
 	# print(parser.parse_args())
 	start_time = time.time()
-	main(pickle_data=True, label='swing', audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
+	main(pickle_data=False, label=LABEL, audio_clusters=N_MUSIC_CLUSTERS, motion_clusters=N_MOTION_CLUSTERS)
 	print("This took {:4.2f}s".format(time.time()-start_time))
