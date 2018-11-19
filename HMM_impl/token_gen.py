@@ -163,20 +163,20 @@ def generate_motion_tokens(skeletons):
 
 
 def cluster_motion(tokens, n_clusters):
-	featuress = np.array([token.features for token in tokens])
-	print(featuress.shape)
-	featuress = normalize(featuress, norm='max')
+	features = np.array([token.features for token in tokens])
+	print(features.shape)
+	features = normalize(features, norm='max')
 	pca = PCA(n_components=.95)
-	featuress = pca.fit_transform(featuress)
-	print(featuress.shape)
+	features = pca.fit_transform(features)
+	print(features.shape)
 
 	# # default bandwidth around 32
-	# kmeans = MeanShift(cluster_all=False).fit(featuress)
+	# kmeans = MeanShift(cluster_all=False).fit(features)
 	# print(kmeans.get_params())
-	# print(estimate_bandwidth(featuress))
+	# print(estimate_bandwidth(features))
 	# n_clusters = len(kmeans.cluster_centers_)
 
-	kmeans = KMeans(n_clusters=n_clusters).fit(featuress)
+	kmeans = KMeans(n_clusters=n_clusters).fit(features)
 
 	clusters = kmeans.labels_
 	for token, label in zip(tokens, clusters):
@@ -331,6 +331,8 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			pickle.dump(audio_samples, f)
 
 
+
+
 	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_samples, audio_clusters)
 	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_clusters)
 
@@ -341,20 +343,13 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	for token in motion_tokens:
 		motion_cluster_counts[token.cluster] += 1
 
-	# print('AUDIO SAMPLES')
-	# for sample in audio_samples:
-	# 	print(sample)
-
 	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
 
 	motion_tokens.sort(key=lambda tok: (tok.filename, tok.person, tok.index))
 	audio_labels_seq = []
 	motion_labels_seq = []
-	# motion_tokens = list(filter(lambda tok: (tok.filename, tok.index) in audio_map, motion_tokens))
 	motion_tokens = [tok for tok in motion_tokens if (tok.filename, tok.index) in audio_map]
 
-	# for tok in motion_tokens:
-	# 	print(tok)
 	motion_labels_seq = [tok.cluster for tok in motion_tokens]
 	audio_labels_seq = np.array([audio_map[(tok.filename, tok.index)].cluster for tok in motion_tokens])
 
@@ -482,7 +477,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			if i % 5 == 0:
 				plt.show()
 			plt.close()
-
 
 
 if __name__ == '__main__':
