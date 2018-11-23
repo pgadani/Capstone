@@ -38,7 +38,7 @@ N_MFCC = 4 # default 20
 N_TEMPO = 3 # don't know default
 
 N_MUSIC_CLUSTERS = 12
-N_MOTION_CLUSTERS = 12
+N_MOTION_CLUSTERS = 20 # 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
@@ -437,7 +437,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	print('Motion Clusters', motion_cluster_counts)
 
 	motion_centers = motion_classifier.cluster_centers_
-	fig_name = 'knn_posmotion_cleaned'
+	fig_name = 'knn_20_posmotion_cleaned'
 	max_draw = 50
 	for cluster, center in enumerate(motion_centers):
 		if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
@@ -477,18 +477,17 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			os.makedirs('skeletons/{}/cluster_{}'.format(fig_name, cluster))
 
 		for i, tok in enumerate(cluster_tokens):
-			fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH)
-			for pos_ind, col in enumerate(ax):
-				# col.get_xaxis().set_visible(False)
-				# col.get_yaxis().set_visible(False)
-				skel = tok.skeletons[pos_ind]
-				draw_pose(skel, subplt=col)
-				if pos_ind == MOTION_LENGTH // 2:
-					plt.title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))	
-			plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
-			# if i % 5 == 0:
-			# 	plt.show()
-			plt.close()
+			if i % 5 == 0:
+				fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH)
+				for pos_ind, col in enumerate(ax):
+					# col.get_xaxis().set_visible(False)
+					# col.get_yaxis().set_visible(False)
+					skel = tok.skeletons[pos_ind]
+					draw_pose(skel, subplt=col)
+					if pos_ind == MOTION_LENGTH // 2:
+						plt.title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))	
+				plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
+				plt.close()
 
 
 
