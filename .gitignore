@@ -1,5 +1,11 @@
 # Training Data Directories
 audio/
+audio_train/
+audio_test/
+audio_missing_skeletons/
+skeletons_cleaned/
+skeletons_train/
+skeletons_test/
 cplskeleton_final/
 images/
 *.pkl

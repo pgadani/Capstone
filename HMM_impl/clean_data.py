@@ -103,7 +103,7 @@ def clean_skeletons(all_skeletons):
 	return new_skeletons
 
 
-def save_skeletons(save_dir, all_skeletons):
+def save_skeletons(all_skeletons, save_dir):
 	if not os.path.exists(save_dir):
 		os.makedirs(save_dir)
 	for genre, genre_skeletons in all_skeletons.items():
@@ -124,7 +124,7 @@ def main():
 	# print(skeletons['ballet']['HEM5cG_43vo_500'][0].keys())
 	# print(skeletons['ballet']['HEM5cG_43vo_500'][0]['person0'])
 	cleaned = clean_skeletons(skeletons)
-	save_skeletons(DEST_DIR, cleaned)
+	save_skeletons(cleaned, DEST_DIR)
 
 
 if __name__ == '__main__':
