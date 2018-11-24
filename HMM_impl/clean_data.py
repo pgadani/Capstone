@@ -3,15 +3,15 @@ import json
 import os
 
 DATA_DIR = '../cplskeleton_final'
-DEST_DIR = '../cplskeleton_final'
+DEST_DIR = '../skeletons_cleaned'
 
 NUM_FRAMES = 300  # 300 frames for each video
 
 # dictionary hashed genre -> sample -> frame -> person -> joints
 
-def load_skeletons():
+def load_skeletons(dir):
 	skeleton_genres = {}
-	for genre_dir in glob.glob('{}/*'.format(DATA_DIR)):
+	for genre_dir in glob.glob('{}/*'.format(dir)):
 		genre = os.path.splitext(os.path.basename(genre_dir))[0]
 
 		skeletons = skeleton_genres[genre] = {}
@@ -118,13 +118,13 @@ def save_skeletons(save_dir, all_skeletons):
 
 
 def main():
-	skeletons = load_skeletons()
+	skeletons = load_skeletons(DATA_DIR)
 	# print(skeletons.keys())
 	# print(skeletons['ballet'].keys())
 	# print(skeletons['ballet']['HEM5cG_43vo_500'][0].keys())
 	# print(skeletons['ballet']['HEM5cG_43vo_500'][0]['person0'])
 	cleaned = clean_skeletons(skeletons)
-	save_skeletons('../skeletons_cleaned', cleaned)
+	save_skeletons(DEST_DIR, cleaned)
 
 
 if __name__ == '__main__':

@@ -46,13 +46,10 @@ JOINTS_DISPLAY = ["head", "neck", \
 					"Rhip", "Rkne", "Rank", "Rkne", "Rhip", \
 					"Lhip", "Lkne", "Lank", "Lkne", "Lhip", "neck"]
 
-
-class AudioSample:
-	def __init__(self, filename, index, raw, features, cluster=None):
+class AudioToken:
+	def __init__(self, filename, index, cluster=None):
 		self.filename = filename
 		self.index = index
-		self.raw = raw
-		self.features = features
 		self.cluster = cluster
 
 	def __str__(self):
@@ -61,12 +58,11 @@ class AudioSample:
 
 
 class MotionToken:
-	def __init__(self, filename, person, index, skeletons, features, cluster=None):
+	def __init__(self, filename, person, index, skeletons, cluster=None):
 		self.filename = filename
 		self.person = person
 		self.index = index
 		self.skeletons = skeletons
-		self.features = features
 		self.cluster = cluster
 
 	def __str__(self):
@@ -157,7 +153,7 @@ def generate_motion_tokens(skeletons):
 				# 		for j2 in JOINTS:
 				# 				motion_features += [s[j1][i] - s0[j2][i] for i in range(2)]
 				all_features.append(motion_features)
-				tokens.append(MotionToken(filename, person, index, token_skels, None))
+				tokens.append(MotionToken(filename, person, index, token_skels))
 	features = np.array(all_features)
 	features = normalize(features, norm='max')
 	pca = PCA(n_components=.95)
@@ -186,7 +182,8 @@ def load_audio(data_path, label='*', sample_time=None):
 	if not sample_time:
 		sample_time = TOKEN_SIZE / FRAME_RATE
 	audio_dir = '{}/{}/{}/*'.format(data_path, 'audio', label)
-	audio_samples = []
+	audio_tokens = []
+	all_features = []
 	for audio_file in glob.glob(audio_dir):
 		file_duration = librosa.core.get_duration(filename=audio_file, sr=SAMPLE_RATE)
 		filename = os.path.splitext(os.path.basename(audio_file))[0]
@@ -200,19 +197,17 @@ def load_audio(data_path, label='*', sample_time=None):
 		tempo = librosa.feature.tempogram(audio_raw, sr=SAMPLE_RATE, hop_length=frame_length, win_length=N_TEMPO)
 		onset = librosa.onset.onset_strength(audio_raw, sr=SAMPLE_RATE, n_fft=frame_length, hop_length=frame_length)
 		onset = np.reshape(onset, (1, len(onset)))
-		print(mfcc.shape, audio_chroma.shape, tempo.shape, mfcc_diff.shape, onset.shape)
 
 		features = np.vstack((audio_chroma, mfcc, mfcc_diff, tempo, onset)).T
 
 		print(audio_file, features.shape, mfcc.shape, audio_chroma.shape, tempo.shape, mfcc_diff.shape)
-		print(audio_file, features.shape)
 		for index, feature in enumerate(features):
-			audio_samples.append(AudioSample(filename, index, None, feature))
-	return audio_samples
+			audio_tokens.append(AudioToken(filename, index))
+			all_features.append(feature)
+	return audio_tokens, all_features
 
 
-def cluster_audio(audio_samples, n_clusters):
-	audio_features = np.array([sample.features for sample in audio_samples])
+def cluster_audio(audio_tokens, audio_features, n_clusters):
 	# print('audio', audio_features.shape)
 	# pca = PCA(n_components=.9)
 	# audio_features = pca.fit_transform(audio_features)
@@ -223,27 +218,27 @@ def cluster_audio(audio_samples, n_clusters):
 	classifier = KMeans(n_clusters=n_clusters).fit(audio_features)
 	clusters = classifier.labels_
 	sequences = []
-	for sample, cluster in zip(audio_samples, clusters):
-		sample.cluster = cluster
+	for tok, cluster in zip(audio_tokens, clusters):
+		tok.cluster = cluster
 	return classifier, clusters, n_clusters
 
 
 # Generates emission probability matrix
 # Probability of observing audio from state of motion
-def emission_probability(audio_samples_map, audio_clusters, motion_tokens, motion_clusters):
+def emission_probability(audio_tok_map, audio_clusters, motion_tokens, motion_clusters):
 	transitions = np.zeros((audio_clusters, motion_clusters))
-	for token in motion_tokens:
-		if (token.filename, token.index) in audio_samples_map:
-			sample = audio_samples_map[(token.filename, token.index)]
-			transitions[sample.cluster, token.cluster] += 1
+	for motion_token in motion_tokens:
+		if (motion_token.filename, motion_token.index) in audio_tok_map:
+			audio_token = audio_tok_map[(motion_token.filename, motion_token.index)]
+			transitions[audio_token.cluster, motion_token.cluster] += 1
 	row_sums = transitions.sum(axis=1, keepdims=True)
 	probabilities = transitions / row_sums
 	return probabilities
 
 
-def transition_probability(audio_samples, audio_clusters):
+def transition_probability(audio_tokens, audio_clusters):
 	transitions = np.zeros((audio_clusters, audio_clusters))
-	for prev, curr in zip(audio_samples[:-1], audio_samples[1:]):
+	for prev, curr in zip(audio_tokens[:-1], audio_tokens[1:]):
 		if prev.filename != curr.filename:
 			continue
 		transitions[prev.cluster][curr.cluster] += 1
@@ -285,13 +280,14 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	rewrite = True
 	pickle_suffix = '{}'.format(label)
 
-	pickle_skeletons = 'pickles/skeleton_{}.pkl'.format(pickle_suffix)
 	pickle_motion_tok = 'pickles/motion_tokens_{}.pkl'.format(pickle_suffix)
 	pickle_motion_feat = 'pickles/motion_features_{}.pkl'.format(pickle_suffix)
-	pickle_samples = 'pickles/audio_{}.pkl'.format(pickle_suffix)
+	pickle_audio_tok = 'pickles/audio_tokens_{}.pkl'.format(pickle_suffix)
+	pickle_audio_feat = 'pickles/audio_features_{}.pkl'.format(pickle_suffix)
 	motion_tokens = None
 	motion_features = None
-	audio_samples = None
+	audio_tokens = None
+	audio_features = None
 
 	if pickle_data:
 		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):
@@ -300,7 +296,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			with open(pickle_motion_feat, 'rb') as f:
 				motion_features = pickle.load(f)
 
-	if not motion_tokens or not motion_features:
+	if motion_tokens is None or motion_features is None:
 		skeletons = load_skeletons('..', label=label)
 		motion_tokens, motion_features = generate_motion_tokens(skeletons)
 		if pickle_data:
@@ -310,21 +306,25 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 				pickle.dump(motion_features, f)
 
 	if pickle_data:
-		if os.path.exists(pickle_samples):
-			with open(pickle_samples, 'rb') as f:
-				audio_samples = pickle.load(f)
-			rewrite = False
-	if audio_samples is None:
-		audio_samples = load_audio('..', label=label)
-	if pickle_data and rewrite:
-		with open(pickle_samples, 'wb+') as f:
-			pickle.dump(audio_samples, f)
+		if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
+			with open(pickle_audio_tok, 'rb') as f:
+				audio_tokens = pickle.load(f)
+			with open(pickle_audio_feat, 'rb') as f:
+				audio_features = pickle.load(f)
 
-	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_samples, audio_clusters)
+	if audio_tokens is None or audio_features is None:
+		audio_tokens, audio_features = load_audio('..', label=label)
+	if pickle_data:
+		with open(pickle_audio_tok, 'wb+') as f:
+			pickle.dump(audio_tokens, f)
+		with open(pickle_audio_feat, 'wb+') as f:
+			pickle.dump(audio_features, f)
+
+	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_tokens, audio_features, audio_clusters)
 	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
 
 	audio_cluster_counts = np.zeros(audio_clusters)
-	for token in audio_samples:
+	for token in audio_tokens:
 		audio_cluster_counts[token.cluster] += 1
 
 	motion_cluster_counts = np.zeros(motion_clusters)
@@ -340,12 +340,12 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	for tok in motion_tokens:
 		print(tok)
 
-	print("NUM AUDIO SAMP", len(audio_samples))
+	print("NUM AUDIO SAMP", len(audio_tokens))
 	print("AUDIO SAMPLES:")
-	for samp in audio_samples:
+	for samp in audio_tokens:
 		print(samp)
 
-	audio_map = {(sample.filename, sample.index):sample for sample in audio_samples}
+	audio_map = {(sample.filename, sample.index):sample for sample in audio_tokens}
 	motion_tokens = [tok for tok in motion_tokens if (tok.filename, tok.index) in audio_map]
 
 	motion_labels_seq = [tok.cluster for tok in motion_tokens]
@@ -363,7 +363,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	print(motion_labels_seq)
 	motion_encoded = sklearn.preprocessing.label_binarize(motion_labels_seq, classes=list(range(motion_clusters)))
 
-	transition_prob = transition_probability(audio_samples, audio_clusters)
+	transition_prob = transition_probability(audio_tokens, audio_clusters)
 	motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
 	emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
 
@@ -465,20 +465,19 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			os.makedirs('skeletons/{}/cluster_{}'.format(fig_name, cluster))
 
 		for i, tok in enumerate(cluster_tokens):
-			if i % 5 == 0:
-				fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
-				fig.subplots_adjust(wspace=0)
-				for pos_ind, col in enumerate(ax):
-					# col.set_xlim(-1.5, 1.5)
-					# col.get_xaxis().set_visible(False)
-					col.get_yaxis().set_visible(False)
-					skel = tok.skeletons[pos_ind * 2]
-					draw_pose(skel, subplt=col)
-					if pos_ind == MOTION_LENGTH // 4:
-						col.set_title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))	
-				plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
-				# plt.show()
-				plt.close()
+			fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
+			fig.subplots_adjust(wspace=0)
+			for pos_ind, col in enumerate(ax):
+				# col.set_xlim(-1.5, 1.5)
+				# col.get_xaxis().set_visible(False)
+				col.get_yaxis().set_visible(False)
+				skel = tok.skeletons[pos_ind * 2]
+				draw_pose(skel, subplt=col)
+				if pos_ind == MOTION_LENGTH // 4:
+					col.set_title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))	
+			plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
+			# plt.show()
+			plt.close()
 
 
 
