@@ -27,17 +27,17 @@ SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
 
-TOKEN_SIZE = 10 # frames per token
+TOKEN_SIZE = 20 # frames per token
 
-MOTION_STRIDE = 1 # default is 1
-MOTION_LENGTH = 10 # default is TOKEN_SIZE // MOTION_STRIDE
+MOTION_STRIDE = 2 # default is 1
+MOTION_LENGTH = TOKEN_SIZE // MOTION_STRIDE
 
 N_CHROMA = 4 # default 12
 N_MFCC = 4 # default 20
 N_TEMPO = 3 # don't know default
 
 N_MUSIC_CLUSTERS = 12
-N_MOTION_CLUSTERS = 15 # 12
+N_MOTION_CLUSTERS = 25 # 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
@@ -103,14 +103,13 @@ def transform(point, offset, angle, scale):
 
 def generate_motion_tokens(skeletons):
 	tokens = []
-	n_frames = min(TOKEN_SIZE, MOTION_STRIDE * MOTION_LENGTH)
 	all_features = []
-	for filename, skel in skeletons.items():
-		for person, positions in skel.items():
-			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - TOKEN_SIZE):
+	for filename, skel in sorted(skeletons.items()):
+		for person, positions in sorted(skel.items()):
+			for index in range(0, NUM_SKELETON_POS // TOKEN_SIZE - 1):
 				i = index * TOKEN_SIZE
 				has_all_positions = True
-				for k in range(0, n_frames + 1, MOTION_STRIDE):
+				for k in range(0, TOKEN_SIZE + 1, MOTION_STRIDE):
 					if 'head' not in positions[i + k]:
 						has_all_positions = False
 						break
@@ -126,10 +125,10 @@ def generate_motion_tokens(skeletons):
 				scale = 1/math.sqrt(diff[0]**2 + diff[1]**2)
 				motion_features = []
 				token_skels = []
-				for k in range(i, i + n_frames + 1 - MOTION_STRIDE, MOTION_STRIDE):
+				for k in range(0, TOKEN_SIZE + 1, MOTION_STRIDE):
 					curr_skel = {}
 					for joint in JOINTS:
-						curr_skel[joint] = transform(positions[k][joint], offset, angle, scale)
+						curr_skel[joint] = transform(positions[i + k][joint], offset, angle, scale)
 					token_skels.append(curr_skel)
 				for s in token_skels:
 					for j1 in JOINTS:
@@ -149,7 +148,12 @@ def generate_motion_tokens(skeletons):
 				all_features.append(motion_features)
 				tokens.append(MotionToken(filename, person, index, token_skels))
 
-	features = normalize(np.array(all_features), norm='max')
+	features = np.array(all_features)
+	# features = normalize(np.array(all_features), norm='l2')
+	mean = np.mean(features, axis=0)
+	std = np.sqrt(np.var(features, axis=0))
+	features = (features - mean[np.newaxis, :]) / std[np.newaxis, :]
+	# features = normalize(np.array(all_features), norm='l2', axis=0)
 	pca = PCA(n_components=.95)
 	features = pca.fit_transform(features)
 	return tokens, features
@@ -158,9 +162,9 @@ def generate_motion_tokens(skeletons):
 def cluster_motion(tokens, features, n_clusters):
 	if CLUSTERING == 'm':
 		# default bandwidth around 32
-		classifier = MeanShift(cluster_all=False).fit(features)
+		bw = estimate_bandwidth(features)
+		classifier = MeanShift(bandwidth=bw, cluster_all=False).fit(features)
 		print(classifier.get_params())
-		print(estimate_bandwidth(features))
 		n_clusters = len(classifier.cluster_centers_)
 	else:
 		classifier = KMeans(n_clusters=n_clusters).fit(features)
@@ -267,7 +271,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	if motion_tokens is None or motion_features is None: # skeletons is None or 
 		skeletons = load_skeletons(label=label)
 		motion_tokens, motion_features = generate_motion_tokens(skeletons)
-		motion_tokens.sort(key=lambda tok: (tok.filename, tok.person, tok.index))
 		if pickle_data:
 			# with open(pickle_skeletons, 'wb+') as f:
 			# 	pickle.dump(skeletons, f)
@@ -327,6 +330,10 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	fig_name = '{}_{}_{}_posmotion_cleaned'.format(CLUSTERING, motion_clusters, label)
 	max_draw = 50
 	for cluster, center in enumerate(motion_centers):
+		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
+		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
+		if len(cluster_skels) == 0:
+			continue
 		if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
 			cluster = -1
 		# if motion_cluster_counts[cluster] < 10:
@@ -334,21 +341,11 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		curr_draw = 0
 		plt.figure(figsize=(8, 10))
 		plt.axis('equal')
-		for token in motion_tokens:
-			if token.cluster != cluster:
-				continue
-			if curr_draw >= max_draw:
+		for i, skel in enumerate(cluster_skels):
+			if i >= max_draw:
 				break
-			# curr_skel = token_to_skel(token.motion_diff)
-			curr_skel = token.skeletons[0]
-			draw_pose(curr_skel, color='b')
-			curr_draw += 1
-		# cluster_skel = token_to_skel(center)
-		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
-		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
-		if len(cluster_skels) == 0:
-			plt.close()
-			continue
+			draw_pose(skel, color='b')
+
 		cluster_skel = {}
 		for joint in JOINTS:
 			cluster_skel[joint] = (sum([s[joint][0] for s in cluster_skels])/len(cluster_skels), sum([s[joint][1] for s in cluster_skels])/len(cluster_skels))
@@ -356,27 +353,33 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 		if not os.path.exists('skeletons/{}'.format(fig_name)):
 			os.makedirs('skeletons/{}'.format(fig_name))
-		plt.savefig('skeletons/{}/{}_{}count.png'.format(fig_name, cluster, motion_cluster_counts[cluster]))
+		plt.savefig('skeletons/{}/{}_{}count.png'.format(fig_name, cluster, len(cluster_tokens)))
 		# plt.show()
 		plt.close()
 
+	for cluster, center in enumerate(motion_centers):
+		if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
+			cluster = -1
+		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
+		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
 		if not os.path.exists('skeletons/{}/cluster_{}'.format(fig_name, cluster)):
 			os.makedirs('skeletons/{}/cluster_{}'.format(fig_name, cluster))
 
 		for i, tok in enumerate(cluster_tokens):
-			fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
-			fig.subplots_adjust(wspace=0)
-			for pos_ind, col in enumerate(ax):
-				# col.set_xlim(-1.5, 1.5)
-				# col.get_xaxis().set_visible(False)
-				col.get_yaxis().set_visible(False)
-				skel = tok.skeletons[pos_ind * 2]
-				draw_pose(skel, subplt=col)
-				if pos_ind == MOTION_LENGTH // 4:
-					col.set_title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))	
-			plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
-			# plt.show()
-			plt.close()
+			if i % 5 == 0:
+				fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
+				fig.subplots_adjust(wspace=0)
+				for pos_ind, col in enumerate(ax):
+					# col.set_xlim(-1.5, 1.5)
+					# col.get_xaxis().set_visible(False)
+					col.get_yaxis().set_visible(False)
+					skel = tok.skeletons[pos_ind * 2]
+					draw_pose(skel, subplt=col)
+					if pos_ind == MOTION_LENGTH // 4:
+						col.set_title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))
+				plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
+				# plt.show()
+				plt.close()
 
 
 if __name__ == '__main__':
