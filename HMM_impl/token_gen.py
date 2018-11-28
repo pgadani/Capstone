@@ -17,18 +17,20 @@ from sklearn import preprocessing
 
 from hmm import *
 
+import hdbscan
+
 SKEL_DIR = '../skeletons_train_exp'
 AUDIO_DIR = '../audio_train_exp'
 
 LABEL = '*'
-CLUSTERING = 'd' # k for kmeans, m for meanshift, d for dbscan
+CLUSTERING = 'k' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
 
-TOKEN_SIZE = 10 # frames per token
-MOTION_STRIDE = 1 # default is 1
+TOKEN_SIZE = 30 # frames per token
+MOTION_STRIDE = 3 # default is 1
 MOTION_LENGTH = TOKEN_SIZE // MOTION_STRIDE
 
 N_CHROMA = 4 # default 12
@@ -36,7 +38,7 @@ N_MFCC = 4 # default 20
 N_TEMPO = 3 # don't know default
 
 N_MUSIC_CLUSTERS = 12
-N_MOTION_CLUSTERS = 25 # 12
+N_MOTION_CLUSTERS = 30 # 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
@@ -171,9 +173,12 @@ def cluster_motion(tokens, features, n_clusters):
 		print(classifier.get_params())
 		n_clusters = len(classifier.cluster_centers_)
 	elif CLUSTERING == 'd':
-		eps = 28 # 20
-		classifier = DBSCAN(eps=eps, min_samples=5).fit(features)
+		eps = 40 # 35 # 28 # 20
+		classifier = DBSCAN(eps=eps, min_samples=20).fit(features)
 		n_clusters = len(classifier.core_sample_indices_)
+	elif CLUSTERING == 'h':
+		classifier = hdbscan.HDBSCAN().fit(features)
+		n_clusters = max(classifier.labels_) + 1
 	else:
 		classifier = KMeans(n_clusters=n_clusters).fit(features)
 
@@ -338,17 +343,14 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	# print_float_2d(emission_prob)
 	# print('Transitions')
 	# print_float_2d(transition_prob)
-	# print('Motion Transitions')
-	# print_float_2d(motion_transition_prob)
+	print('Motion Transitions')
+	print_float_2d(motion_transition_prob)
 
 
-	if CLUSTERING == 'd':
-		motion_centers = motion_classifier.components_
-	else:
-		motion_centers = motion_classifier.cluster_centers_
+
 	fig_name = '{}_{}_{}_toksize_{}_stride_{}_pos'.format(CLUSTERING, motion_clusters, label, TOKEN_SIZE, MOTION_STRIDE)
 	max_draw = 50
-	for cluster, center in enumerate(motion_centers):
+	for cluster in range(motion_clusters):
 		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
 		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
 		if len(cluster_skels) == 0:
@@ -357,6 +359,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			cluster = -1
 		# if motion_cluster_counts[cluster] < 10:
 		# 	continue
+		files = {tok.filename for tok in cluster_tokens}
 		curr_draw = 0
 		plt.figure(figsize=(8, 10))
 		plt.axis('equal')
@@ -372,11 +375,11 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 		if not os.path.exists('skeletons/{}'.format(fig_name)):
 			os.makedirs('skeletons/{}'.format(fig_name))
-		plt.savefig('skeletons/{}/{}_{}count.png'.format(fig_name, cluster, len(cluster_tokens)))
+		plt.savefig('skeletons/{}/cluster_{}_files_{}_tokens_{}count.png'.format(fig_name, cluster, len(files), len(cluster_tokens)))
 		# plt.show()
 		plt.close()
 
-	for cluster, center in enumerate(motion_centers):
+	for cluster in range(motion_clusters):
 		if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
 			cluster = -1
 		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
@@ -386,8 +389,9 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		if not os.path.exists('skeletons/{}/cluster_{}'.format(fig_name, cluster)):
 			os.makedirs('skeletons/{}/cluster_{}'.format(fig_name, cluster))
 
+
 		for i, tok in enumerate(cluster_tokens):
-			if i % 5 == 0:
+			if i % 3 == 0:
 				fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
 				fig.subplots_adjust(wspace=0)
 				for pos_ind, col in enumerate(ax):
