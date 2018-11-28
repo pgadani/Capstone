@@ -29,8 +29,8 @@ SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
 
-TOKEN_SIZE = 30 # frames per token
-MOTION_STRIDE = 3 # default is 1
+TOKEN_SIZE = 30 # 20 # frames per token
+MOTION_STRIDE = 3 # 4 # default is 1
 MOTION_LENGTH = TOKEN_SIZE // MOTION_STRIDE
 
 N_CHROMA = 4 # default 12
@@ -188,10 +188,16 @@ def cluster_motion(tokens, features, n_clusters):
 	return classifier, clusters, n_clusters
 
 
+# TODO FIX THE FFT LENGTHS HERE
 # returns a list of (source file, index, sample, features) tuples
 def load_audio(label='*', sample_time=None):
 	if not sample_time:
 		sample_time = TOKEN_SIZE / FRAME_RATE
+
+	# aim for sample time between 20 - 40 ms
+	div_h = sample_time / 0.02
+	# div_l = sample_time / 0.04
+	div = int(div_h)
 	audio_dir = '{}/{}/*'.format(AUDIO_DIR, label)
 	audio_tokens = []
 	all_features = []
@@ -202,7 +208,7 @@ def load_audio(label='*', sample_time=None):
 		audio_raw, _ = librosa.core.load(audio_file, sr=SAMPLE_RATE)
 		features = []
 		print(audio_file)
-		audio_chroma = librosa.feature.chroma_cqt(audio_raw, sr=SAMPLE_RATE, hop_length=frame_length, n_chroma=N_CHROMA)
+		audio_chroma = librosa.feature.chroma_cqt(audio_raw, sr=SAMPLE_RATE, n_chroma=N_CHROMA)
 		mfcc = librosa.feature.mfcc(audio_raw, sr=SAMPLE_RATE, n_fft=frame_length, hop_length=frame_length, n_mfcc=N_MFCC)
 		diff_width = mfcc.shape[-1]
 		if diff_width % 2 == 0:
@@ -272,15 +278,12 @@ def draw_pose(skel, color='k', subplt=None):
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 	# MOTION
-	# pickle_skeletons = 'pickles/skeletons_{}.pkl'.format(label)
 	pickle_motion_tok = 'pickles/motion_tokens_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	pickle_motion_feat = 'pickles/motion_features_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	motion_tokens = None
 	motion_features = None
 	if pickle_data:
 		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):  # os.path.exists(pickle_skeletons) and 
-			# with open(pickle_skeletons, 'rb') as f:
-			# 	skeletons = pickle.load(f)
 			with open(pickle_motion_tok, 'rb') as f:
 				motion_tokens = pickle.load(f)
 			with open(pickle_motion_feat, 'rb') as f:
@@ -290,8 +293,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		skeletons = load_skeletons(label=label)
 		motion_tokens, motion_features = generate_motion_tokens(skeletons)
 		if pickle_data:
-			# with open(pickle_skeletons, 'wb+') as f:
-			# 	pickle.dump(skeletons, f)
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
 			with open(pickle_motion_feat, 'wb+') as f:
@@ -301,9 +302,11 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	print(motion_clusters)
 	print('{} TOKENS WITH {} OUTLIERS:'.format(len(motion_tokens), len([m for m in motion_tokens if m.cluster == -1])))
 	motion_cluster_counts = np.zeros(motion_clusters)
+	print('TOKENS')
 	for token in motion_tokens:
 		if token.cluster != -1:
 			motion_cluster_counts[token.cluster] += 1
+		print(token)
 
 	print('Motion Clusters', [c for c in motion_cluster_counts if c > 0])
 
@@ -336,13 +339,13 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 	audio_map = {(tok.filename, tok.index):tok for tok in audio_tokens}
 	transition_prob = transition_probability(audio_tokens, audio_clusters)
-	motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
 	emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
+	motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
 
-	# print('Emissions:')
-	# print_float_2d(emission_prob)
-	# print('Transitions')
-	# print_float_2d(transition_prob)
+	print('Emissions:')
+	print_float_2d(emission_prob)
+	print('Transitions')
+	print_float_2d(transition_prob)
 	print('Motion Transitions')
 	print_float_2d(motion_transition_prob)
 
@@ -379,32 +382,32 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		# plt.show()
 		plt.close()
 
-	for cluster in range(motion_clusters):
-		if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
-			cluster = -1
-		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
-		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
-		if len(cluster_skels) == 0:
-			continue
-		if not os.path.exists('skeletons/{}/cluster_{}'.format(fig_name, cluster)):
-			os.makedirs('skeletons/{}/cluster_{}'.format(fig_name, cluster))
+	# for cluster in range(motion_clusters):
+	# 	if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:
+	# 		cluster = -1
+	# 	cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
+	# 	cluster_skels = [m.skeletons[0] for m in cluster_tokens]
+	# 	if len(cluster_skels) == 0:
+	# 		continue
+	# 	if not os.path.exists('skeletons/{}/cluster_{}'.format(fig_name, cluster)):
+	# 		os.makedirs('skeletons/{}/cluster_{}'.format(fig_name, cluster))
 
 
-		for i, tok in enumerate(cluster_tokens):
-			if i % 3 == 0:
-				fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
-				fig.subplots_adjust(wspace=0)
-				for pos_ind, col in enumerate(ax):
-					# col.set_xlim(-1.5, 1.5)
-					# col.get_xaxis().set_visible(False)
-					col.get_yaxis().set_visible(False)
-					skel = tok.skeletons[pos_ind * 2]
-					draw_pose(skel, subplt=col)
-					if pos_ind == MOTION_LENGTH // 4:
-						col.set_title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))
-				plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
-				# plt.show()
-				plt.close()
+	# 	for i, tok in enumerate(cluster_tokens):
+	# 		if i % 3 == 0:
+	# 			fig, ax = plt.subplots(nrows=1, ncols=MOTION_LENGTH // 2, sharey=True, figsize=(18, 8))
+	# 			fig.subplots_adjust(wspace=0)
+	# 			for pos_ind, col in enumerate(ax):
+	# 				# col.set_xlim(-1.5, 1.5)
+	# 				# col.get_xaxis().set_visible(False)
+	# 				col.get_yaxis().set_visible(False)
+	# 				skel = tok.skeletons[pos_ind * 2]
+	# 				draw_pose(skel, subplt=col)
+	# 				if pos_ind == MOTION_LENGTH // 4:
+	# 					col.set_title('cluster_{}_motion_{}_{}_{}'.format(cluster, tok.filename, tok.person, tok.index))
+	# 			plt.savefig('skeletons/{}/cluster_{}/motion_{}_{}_{}.png'.format(fig_name, cluster, tok.filename, tok.person, tok.index))
+	# 			# plt.show()
+	# 			plt.close()
 
 
 if __name__ == '__main__':
