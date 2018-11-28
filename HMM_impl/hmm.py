@@ -34,6 +34,8 @@ def print_float_2d(arr, dec=2):
 def emission_probability(audio_tok_map, audio_clusters, motion_tokens, motion_clusters):
 	transitions = np.zeros((audio_clusters, motion_clusters))
 	for motion_token in motion_tokens:
+		if motion_token.cluster == -1:
+			continue
 		if (motion_token.filename, motion_token.index) in audio_tok_map:
 			audio_token = audio_tok_map[(motion_token.filename, motion_token.index)]
 			transitions[audio_token.cluster, motion_token.cluster] += 1
@@ -45,7 +47,7 @@ def emission_probability(audio_tok_map, audio_clusters, motion_tokens, motion_cl
 def transition_probability(audio_tokens, audio_clusters):
 	transitions = np.zeros((audio_clusters, audio_clusters))
 	for prev, curr in zip(audio_tokens[:-1], audio_tokens[1:]):
-		if prev.filename != curr.filename:
+		if prev.filename != curr.filename or prev.cluster == -1 or curr.cluster == -1:
 			continue
 		transitions[prev.cluster][curr.cluster] += 1
 	row_sums = transitions.sum(axis=1, keepdims=True)
