@@ -3,13 +3,13 @@ import os
 import shutil
 
 
-SKEL_DIR = '../skeletons_cleaned'
+SKEL_DIR = '../skeletons_cleaned_experiment'
 AUDIO_DIR = '../audio'
 
-TRAIN_SKEL_DIR = '../skeletons_train'
-TEST_SKEL_DIR = '../skeletons_test'
-TRAIN_AUDIO_DIR = '../audio_train'
-TEST_AUDIO_DIR = '../audio_test'
+TRAIN_SKEL_DIR = '../skeletons_train_exp'
+TEST_SKEL_DIR = '../skeletons_test_exp'
+TRAIN_AUDIO_DIR = '../audio_train_exp'
+TEST_AUDIO_DIR = '../audio_test_exp'
 
 ALL_DIRS = [TRAIN_AUDIO_DIR, TEST_AUDIO_DIR, TRAIN_SKEL_DIR, TEST_SKEL_DIR]
 

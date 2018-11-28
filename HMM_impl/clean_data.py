@@ -3,7 +3,7 @@ import json
 import os
 
 DATA_DIR = '../cplskeleton_final'
-DEST_DIR = '../skeletons_cleaned'
+DEST_DIR = '../skeletons_cleaned_experiment'
 
 NUM_FRAMES = 300  # 300 frames for each video
 
@@ -61,7 +61,7 @@ def find_matches(prev, curr):
 		switched = True
 		prev, curr = curr, prev
 	for p, ps in prev.items():
-		min_dist = 10000 # larger than diagonal distance for 1024 x 768
+		min_dist = 100 # 10000 # larger than diagonal distance for 1024 x 768
 		min_person = None
 		for c, cs in curr.items():
 			if c in used:
