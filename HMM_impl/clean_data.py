@@ -3,7 +3,7 @@ import json
 import os
 
 DATA_DIR = '../cplskeleton_final'
-DEST_DIR = '../skeletons_cleaned_experiment'
+DEST_DIR = '../skeletons_cleaned_new'
 
 NUM_FRAMES = 300  # 300 frames for each video
 
@@ -102,6 +102,28 @@ def clean_skeletons(all_skeletons):
 				prev_people = new_file[frame]
 	return new_skeletons
 
+'''transforms the indexing from
+	genre -> file -> list of frames -> people -> joints to
+	genre -> file -> people -> map of frames -> joints
+'''
+def transform_skeletons(skeletons):
+	new_skeletons = {}
+	for genre, genre_skeletons in skeletons.items():
+		new_skeletons[genre] = {}
+		for file, skeleton_file in genre_skeletons.items():
+			new_file = new_skeletons[genre][file] = {}
+			for frame, skeleton_frame in enumerate(skeleton_file):
+				for person, joints in skeleton_frame.items():
+					if person not in new_file:
+						new_file[person] = {}
+					new_file[person][frame] = {}
+					for joint, pos in joints.items():
+						new_file[person][frame][joint] = pos
+			for person in list(new_file.keys()):
+				if len(new_file[person]) < 0.1 * NUM_FRAMES:
+					del new_file[person]
+	return new_skeletons
+
 
 def save_skeletons(all_skeletons, save_dir):
 	if not os.path.exists(save_dir):
@@ -124,7 +146,8 @@ def main():
 	# print(skeletons['ballet']['HEM5cG_43vo_500'][0].keys())
 	# print(skeletons['ballet']['HEM5cG_43vo_500'][0]['person0'])
 	cleaned = clean_skeletons(skeletons)
-	save_skeletons(cleaned, DEST_DIR)
+	transformed = transform_skeletons(cleaned)
+	save_skeletons(transformed, DEST_DIR)
 
 
 if __name__ == '__main__':

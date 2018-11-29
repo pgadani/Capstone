@@ -3,7 +3,7 @@ import os
 import shutil
 
 
-SKEL_DIR = '../skeletons_cleaned_experiment'
+SKEL_DIR = '../skeletons_cleaned_new'
 AUDIO_DIR = '../audio'
 
 TRAIN_SKEL_DIR = '../skeletons_train_exp'
