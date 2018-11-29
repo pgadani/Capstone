@@ -23,14 +23,14 @@ SKEL_DIR = '../skeletons_train_exp'
 AUDIO_DIR = '../audio_train_exp'
 
 LABEL = '*'
-CLUSTERING = 'k' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
+CLUSTERING = 'h' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
 
-TOKEN_SIZE = 30 # 20 # frames per token
-MOTION_STRIDE = 3 # 4 # default is 1
+TOKEN_SIZE = 10 # 20 # frames per token
+MOTION_STRIDE = 1 # 4 # default is 1
 MOTION_LENGTH = TOKEN_SIZE // MOTION_STRIDE
 
 N_CHROMA = 4 # default 12
@@ -177,7 +177,7 @@ def cluster_motion(tokens, features, n_clusters):
 		classifier = DBSCAN(eps=eps, min_samples=20).fit(features)
 		n_clusters = len(classifier.core_sample_indices_)
 	elif CLUSTERING == 'h':
-		classifier = hdbscan.HDBSCAN().fit(features)
+		classifier = hdbscan.HDBSCAN(min_cluster_size=30, min_samples=1).fit(features)
 		n_clusters = max(classifier.labels_) + 1
 	else:
 		classifier = KMeans(n_clusters=n_clusters).fit(features)
@@ -195,20 +195,20 @@ def load_audio(label='*', sample_time=None):
 		sample_time = TOKEN_SIZE / FRAME_RATE
 
 	# aim for sample time between 20 - 40 ms
-	div_h = sample_time / 0.02
-	# div_l = sample_time / 0.04
-	div = int(div_h)
+	# div_h = sample_time / 0.02
+	div_l = sample_time / 0.04
+	div = int(div_l) + 1 # or int(div_h)
 	audio_dir = '{}/{}/*'.format(AUDIO_DIR, label)
 	audio_tokens = []
 	all_features = []
 	for audio_file in glob.glob(audio_dir):
 		file_duration = librosa.core.get_duration(filename=audio_file, sr=SAMPLE_RATE)
 		filename = os.path.splitext(os.path.basename(audio_file))[0]
-		frame_length = int(sample_time * SAMPLE_RATE)
+		frame_length = int(sample_time * SAMPLE_RATE / div)
 		audio_raw, _ = librosa.core.load(audio_file, sr=SAMPLE_RATE)
 		features = []
-		print(audio_file)
-		audio_chroma = librosa.feature.chroma_cqt(audio_raw, sr=SAMPLE_RATE, n_chroma=N_CHROMA)
+		print(audio_file, frame_length)
+		audio_chroma = librosa.feature.chroma_stft(audio_raw, sr=SAMPLE_RATE, n_fft=frame_length, hop_length=frame_length, n_chroma=N_CHROMA)
 		mfcc = librosa.feature.mfcc(audio_raw, sr=SAMPLE_RATE, n_fft=frame_length, hop_length=frame_length, n_mfcc=N_MFCC)
 		diff_width = mfcc.shape[-1]
 		if diff_width % 2 == 0:
@@ -220,19 +220,27 @@ def load_audio(label='*', sample_time=None):
 		onset = librosa.onset.onset_strength(audio_raw, sr=SAMPLE_RATE, n_fft=frame_length, hop_length=frame_length)
 		onset = np.reshape(onset, (1, len(onset)))
 
+		print(audio_file, mfcc.shape, audio_chroma.shape, tempo.shape, mfcc_diff.shape)
 		features = np.vstack((audio_chroma, mfcc, mfcc_diff, tempo, onset)).T
-
-		print(audio_file, features.shape, mfcc.shape, audio_chroma.shape, tempo.shape, mfcc_diff.shape)
-		for index, feature in enumerate(features):
+		# print(audio_file, features.shape)
+		num_tok = int(FRAME_RATE * SAMPLE_LEN // TOKEN_SIZE)
+		for index in range(num_tok - 1):
+			feat = np.mean(features[index*div:(index+1)*div, :], axis=0)
+			if np.any(np.isnan(feat)):
+				print(audio_file, index)
+				print(feat)
+				continue
 			audio_tokens.append(AudioToken(filename, index))
-			all_features.append(feature)
-	return audio_tokens, all_features
+			all_features.append(feat.T)
+	pca = PCA(n_components=.9)
+	audio_features = pca.fit_transform(np.array(all_features))
+	print('audio', audio_features.shape)
+	print(np.where(np.isnan(audio_features)))
+	print(np.where(np.isfinite(audio_features)))
+	return audio_tokens, audio_features
 
 
 def cluster_audio(audio_tokens, audio_features, n_clusters):
-	# print('audio', audio_features.shape)
-	# pca = PCA(n_components=.9)
-	# audio_features = pca.fit_transform(audio_features)
 	# print(audio_features.shape)
 
 	# classifier = MeanShift().fit(audio_features)
@@ -300,7 +308,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
 	print(motion_clusters)
-	print('{} TOKENS WITH {} OUTLIERS:'.format(len(motion_tokens), len([m for m in motion_tokens if m.cluster == -1])))
 	motion_cluster_counts = np.zeros(motion_clusters)
 	print('TOKENS')
 	for token in motion_tokens:
@@ -308,6 +315,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			motion_cluster_counts[token.cluster] += 1
 		print(token)
 
+	print('{} TOKENS WITH {} OUTLIERS:'.format(len(motion_tokens), len([m for m in motion_tokens if m.cluster == -1])))
 	print('Motion Clusters', [c for c in motion_cluster_counts if c > 0])
 
 
