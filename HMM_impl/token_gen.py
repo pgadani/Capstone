@@ -83,15 +83,10 @@ def load_skeletons(label='*'):
 		skeleton = skeletons[filename]
 		with open(file) as f:
 			data = json.load(f)
-			for frame, skels in enumerate(data):
-				for person, joints in skels.items():
-					if person not in skeleton:
-						skeleton[person] = [{} for i in range(NUM_SKELETON_POS)]
-					for joint, pos in joints.items():
-						skeleton[person][frame][joint] = pos
-			for person in list(skeleton.keys()):
-				if len([frame for frame in skeleton[person] if frame]) < 0.1 * NUM_SKELETON_POS:
-					del skeleton[person]
+			for person, positions in data.items():
+				skeleton[person] = {}
+				for frame, joints in positions.items():
+					skeleton[person][int(frame)] = joints
 	return skeletons
 
 
@@ -111,7 +106,7 @@ def generate_motion_tokens(skeletons):
 				i = index * TOKEN_SIZE
 				has_all_positions = True
 				for k in range(0, TOKEN_SIZE + 1, MOTION_STRIDE):
-					if 'head' not in positions[i + k]:
+					if i+k not in positions:
 						has_all_positions = False
 						break
 				if not has_all_positions:
@@ -291,13 +286,13 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	motion_tokens = None
 	motion_features = None
 	if pickle_data:
-		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):  # os.path.exists(pickle_skeletons) and 
+		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):
 			with open(pickle_motion_tok, 'rb') as f:
 				motion_tokens = pickle.load(f)
 			with open(pickle_motion_feat, 'rb') as f:
 				motion_features = pickle.load(f)
 
-	if motion_tokens is None or motion_features is None: # skeletons is None or 
+	if motion_tokens is None or motion_features is None: # skeletons is None or
 		skeletons = load_skeletons(label=label)
 		motion_tokens, motion_features = generate_motion_tokens(skeletons)
 		if pickle_data:

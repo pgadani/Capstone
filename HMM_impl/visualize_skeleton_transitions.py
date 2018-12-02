@@ -5,35 +5,16 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
+from token_gen import load_skeletons
+
 
 NUM_FRAMES = 300  # 300 frames for each video
-SKEL_DIR = '../skeletons_cleaned_exp'
+SKEL_DIR = '../skeletons_cleaned_new'
+SAVE_DIR = '../diffs_new'
 
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
 
 hist_bins = 100
-
-
-def load_skeletons(label='*'):
-	skeleton_dir = '{}/{}/*'.format(SKEL_DIR, label)
-	skeletons = {}
-	for file in glob.glob(skeleton_dir):
-		filename = os.path.splitext(os.path.basename(file))[0]
-		if filename not in skeletons:
-			skeletons[filename] = {}
-		skeleton = skeletons[filename]
-		with open(file) as f:
-			data = json.load(f)
-			for frame, skels in enumerate(data):
-				for person, joints in skels.items():
-					if person not in skeleton:
-						skeleton[person] = [{} for i in range(NUM_FRAMES)]
-					for joint, pos in joints.items():
-						skeleton[person][frame][joint] = pos
-			for person in list(skeleton.keys()):
-				if len([frame for frame in skeleton[person] if frame]) < 0.1 * NUM_FRAMES:
-					del skeleton[person]
-	return skeletons
 
 
 def transform(point, offset, angle, scale):
@@ -66,7 +47,11 @@ def visualize_all_diffs(skeletons):
 	flat = []
 	for filename, skel_file in skeletons.items():
 		for person, positions in skel_file.items():
-			for p1, p2 in zip(positions[:-1], positions[1:]):
+			for f1 in sorted(list(positions.keys())):
+				if f1 + 1 not in positions:
+					continue
+				p1 = positions[f1]
+				p2 = positions[f1+1]
 				if 'head' not in p1 or 'head' not in p2:
 					continue
 				diff = skel_diff(p1, p2)
@@ -88,19 +73,25 @@ def visualize_all_diffs(skeletons):
 
 
 def plot_per_file(skeletons):
+	if not os.path.exists(SAVE_DIR):
+		os.makedirs(SAVE_DIR)
 	for filename, skel_file in skeletons.items():
 		plt.figure(figsize=(9.6, 4.8))
 		plt.ylim(0, 5)
 		for person, positions in skel_file.items():
 			diffs = np.zeros(NUM_FRAMES-1)
-			for i, (p1, p2) in enumerate(zip(positions[:-1], positions[1:])):
+			for f1 in sorted(list(positions.keys())):
+				if f1 + 1 not in positions:
+					continue
+				p1 = positions[f1]
+				p2 = positions[f1+1]
 				if 'head' not in p1 or 'head' not in p2:
 					continue
 				diff = skel_diff(p1, p2)
 				if diff is not None:
-					diffs[i] = diff
+					diffs[f1] = diff
 			plt.plot(diffs)
-		plt.savefig('../diff_skeletons/diffs_{}.png'.format(filename))
+		plt.savefig('{}/diffs_{}.png'.format(SAVE_DIR, filename))
 		plt.close()
 
 
