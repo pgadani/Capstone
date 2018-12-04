@@ -19,11 +19,11 @@ from hmm import *
 
 import hdbscan
 
-SKEL_DIR = '../skeletons_train_exp'
-AUDIO_DIR = '../audio_train_exp'
+SKEL_DIR = '../skeletons_train'
+AUDIO_DIR = '../audio_train'
 
 LABEL = '*'
-CLUSTERING = 'h' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
+CLUSTERING = 'k' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
@@ -172,7 +172,7 @@ def cluster_motion(tokens, features, n_clusters):
 		classifier = DBSCAN(eps=eps, min_samples=20).fit(features)
 		n_clusters = len(classifier.core_sample_indices_)
 	elif CLUSTERING == 'h':
-		classifier = hdbscan.HDBSCAN(min_cluster_size=30, min_samples=1).fit(features)
+		classifier = hdbscan.HDBSCAN(prediction_data=True).fit(features)
 		n_clusters = max(classifier.labels_) + 1
 	else:
 		classifier = KMeans(n_clusters=n_clusters).fit(features)
@@ -227,12 +227,13 @@ def load_audio(label='*', sample_time=None):
 				continue
 			audio_tokens.append(AudioToken(filename, index))
 			all_features.append(feat.T)
-	pca = PCA(n_components=.9)
-	audio_features = pca.fit_transform(np.array(all_features))
-	print('audio', audio_features.shape)
-	print(np.where(np.isnan(audio_features)))
-	print(np.where(np.isfinite(audio_features)))
-	return audio_tokens, audio_features
+
+	full_audio_features = preprocessing.scale(np.array(all_features))
+	pca = PCA(n_components=.95)
+	pca_audio_features = pca.fit_transform(full_audio_features)
+	print('Full audio', full_audio_features.shape, 'PCA audio', pca_audio_features.shape)
+	print(np.where(np.isnan(full_audio_features)))
+	return audio_tokens, pca_audio_features, full_audio_features
 
 
 def cluster_audio(audio_tokens, audio_features, n_clusters):
@@ -317,22 +318,28 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	# AUDIO
 	pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
 	pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
+	pickle_audio_feat_full = 'pickles/audio_features_full_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
 	audio_tokens = None
 	audio_features = None
+	audio_features_full = None
 	if pickle_data:
 		if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
 			with open(pickle_audio_tok, 'rb') as f:
 				audio_tokens = pickle.load(f)
 			with open(pickle_audio_feat, 'rb') as f:
 				audio_features = pickle.load(f)
+			with open(pickle_audio_feat_full, 'rb') as f:
+				audio_features_full = pickle.load(f)
 
-	if audio_tokens is None or audio_features is None:
-		audio_tokens, audio_features = load_audio(label=label)
+	if audio_tokens is None or audio_features is None or audio_features_full is None:
+		audio_tokens, audio_features, audio_features_full = load_audio(label=label)
 	if pickle_data:
 		with open(pickle_audio_tok, 'wb+') as f:
 			pickle.dump(audio_tokens, f)
 		with open(pickle_audio_feat, 'wb+') as f:
 			pickle.dump(audio_features, f)
+		with open(pickle_audio_feat_full, 'wb+') as f:
+			pickle.dump(audio_features_full, f)
 
 	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_tokens, audio_features, audio_clusters)
 	audio_cluster_counts = np.zeros(audio_clusters)
@@ -354,8 +361,9 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 
 
-	fig_name = '{}_{}_{}_toksize_{}_stride_{}_pos'.format(CLUSTERING, motion_clusters, label, TOKEN_SIZE, MOTION_STRIDE)
+	fig_name = '{}_{}_{}_toksize_{}_stride_{}_posmotion'.format(CLUSTERING, motion_clusters, label, TOKEN_SIZE, MOTION_STRIDE)
 	max_draw = 50
+	cluster_centers = {}
 	for cluster in range(motion_clusters):
 		cluster_tokens = [m for m in motion_tokens if m.cluster == cluster]
 		cluster_skels = [m.skeletons[0] for m in cluster_tokens]
@@ -378,12 +386,19 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		for joint in JOINTS:
 			cluster_skel[joint] = (sum([s[joint][0] for s in cluster_skels])/len(cluster_skels), sum([s[joint][1] for s in cluster_skels])/len(cluster_skels))
 		draw_pose(cluster_skel, color='r')
+		cluster_centers[cluster] = cluster_skel
 
 		if not os.path.exists('skeletons/{}'.format(fig_name)):
 			os.makedirs('skeletons/{}'.format(fig_name))
 		plt.savefig('skeletons/{}/cluster_{}_files_{}_tokens_{}count.png'.format(fig_name, cluster, len(files), len(cluster_tokens)))
 		# plt.show()
 		plt.close()
+
+	# cluster_centers_file = 'skeletons/cluster_centers_{}.txt'.format(fig_name)
+	# with open(cluster_centers_file, 'w+') as f:
+	# 	json.dump(cluster_centers, f)
+
+
 
 	# for cluster in range(motion_clusters):
 	# 	if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:

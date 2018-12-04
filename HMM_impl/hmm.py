@@ -39,8 +39,8 @@ def emission_probability(audio_tok_map, audio_clusters, motion_tokens, motion_cl
 		if (motion_token.filename, motion_token.index) in audio_tok_map:
 			audio_token = audio_tok_map[(motion_token.filename, motion_token.index)]
 			transitions[audio_token.cluster, motion_token.cluster] += 1
-	row_sums = transitions.sum(axis=1, keepdims=True)
-	probabilities = transitions / row_sums
+	# row_sums = transitions.sum(axis=1, keepdims=True)
+	probabilities = normalize(transitions, norm='l1')
 	return probabilities
 
 
@@ -50,54 +50,40 @@ def transition_probability(audio_tokens, audio_clusters):
 		if prev.filename != curr.filename or prev.cluster == -1 or curr.cluster == -1:
 			continue
 		transitions[prev.cluster][curr.cluster] += 1
-	row_sums = transitions.sum(axis=1, keepdims=True)
-	probabilities = transitions / row_sums
+	probabilities = normalize(transitions, norm='l1')
 	return probabilities
 
 
 # TODO CLEAN THIS AFTER FINISHING WITH FIXING TOKEN GEN
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
-	pickle_suffix = '{}'.format(label)
-
-	pickle_motion_tok = 'pickles/motion_tokens_{}.pkl'.format(pickle_suffix)
-	pickle_motion_feat = 'pickles/motion_features_{}.pkl'.format(pickle_suffix)
-	pickle_audio_tok = 'pickles/audio_tokens_{}.pkl'.format(pickle_suffix)
-	pickle_audio_feat = 'pickles/audio_features_{}.pkl'.format(pickle_suffix)
+	pickle_motion_tok = 'pickles/motion_tokens_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
+	pickle_motion_feat = 'pickles/motion_features_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	motion_tokens = None
 	motion_features = None
+
+	pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
+	pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
 	audio_tokens = None
 	audio_features = None
 
-	if pickle_data:
-		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):
-			with open(pickle_motion_tok, 'rb') as f:
-				motion_tokens = pickle.load(f)
-			with open(pickle_motion_feat, 'rb') as f:
-				motion_features = pickle.load(f)
+	if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):
+		with open(pickle_motion_tok, 'rb') as f:
+			motion_tokens = pickle.load(f)
+		with open(pickle_motion_feat, 'rb') as f:
+			motion_features = pickle.load(f)
+	else:
+		print('Please generate tokens first with token_gen')
+		return
 
-	if motion_tokens is None or motion_features is None:
-		skeletons = load_skeletons('..', label=label)
-		motion_tokens, motion_features = generate_motion_tokens(skeletons)
-		if pickle_data:
-			with open(pickle_motion_tok, 'wb+') as f:
-				pickle.dump(motion_tokens, f)
-			with open(pickle_motion_feat, 'wb+') as f:
-				pickle.dump(motion_features, f)
+	if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
+		with open(pickle_audio_tok, 'rb') as f:
+			audio_tokens = pickle.load(f)
+		with open(pickle_audio_feat, 'rb') as f:
+			audio_features = pickle.load(f)
+	else:
+		print('Please generate tokens first with token_gen')
+		return
 
-	if pickle_data:
-		if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
-			with open(pickle_audio_tok, 'rb') as f:
-				audio_tokens = pickle.load(f)
-			with open(pickle_audio_feat, 'rb') as f:
-				audio_features = pickle.load(f)
-
-	if audio_tokens is None or audio_features is None:
-		audio_tokens, audio_features = load_audio('..', label=label)
-	if pickle_data:
-		with open(pickle_audio_tok, 'wb+') as f:
-			pickle.dump(audio_tokens, f)
-		with open(pickle_audio_feat, 'wb+') as f:
-			pickle.dump(audio_features, f)
 
 	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_tokens, audio_features, audio_clusters)
 	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
@@ -110,7 +96,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	for token in motion_tokens:
 		motion_cluster_counts[token.cluster] += 1
 
-	motion_tokens.sort(key=lambda tok: (tok.filename, tok.person, tok.index))
+	# motion_tokens.sort(key=lambda tok: (tok.filename, tok.person, tok.index))
 
 	print("AUDIO CLUSTER COUNTS", audio_cluster_counts)
 	print("MOTION CLUSTER COUNTS", motion_cluster_counts)
@@ -160,7 +146,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		audio_samp = (samp[0], samp[1])
 		if audio_samp in audio_map:
 			recon_samples.append(samp)
-			if len(recon_samples) >= 10:
+			if len(recon_samples) >= 80:
 				break
 
 	for samp in recon_samples:
@@ -172,7 +158,13 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		priors = np.zeros(audio_clusters)
 		priors[expected_audio[0].cluster] = 1
 
-		result = viterbi([tok.cluster for tok in recon_motion], transition_prob, emission_prob, priors)
+		if CLUSTERING == 'h':
+			features = [motion_features[tok.index, :] for tok in recon_motion]
+			motion_labels, _strengths = hdbscan.approximate_predict(motion_classifier, features)
+		else:
+			motion_labels = [tok.cluster for tok in recon_motion]
+
+		result = viterbi(motion_labels, transition_prob, emission_prob, priors)
 
 		# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
 		# result = hmm.predict(recon_motion_encoded)
@@ -195,11 +187,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	print_float_2d(transition_prob)
 	print('Motion Transitions')
 	print_float_2d(motion_transition_prob)
-	# for erow in emission_prob:
-	# 	for eprob in erow:
-	# 		print("{:0.2f}".format(eprob), end=' ')
-	# 	print()
-
 
 
 

@@ -3,7 +3,7 @@ import json
 import os
 
 DATA_DIR = '../cplskeleton_final'
-DEST_DIR = '../skeletons_cleaned_new'
+DEST_DIR = '../skeletons_cleaned'
 
 NUM_FRAMES = 300  # 300 frames for each video
 
@@ -119,8 +119,13 @@ def transform_skeletons(skeletons):
 					new_file[person][frame] = {}
 					for joint, pos in joints.items():
 						new_file[person][frame][joint] = pos
-			for person in list(new_file.keys()):
-				if len(new_file[person]) < 0.1 * NUM_FRAMES:
+			# for person in list(new_file.keys()):
+			# 	if len(new_file[person]) < 0.1 * NUM_FRAMES:
+			# 		del new_file[person]
+			keys = new_file.keys()
+			if len(keys) > 2:
+				sorted_people = sorted(keys, key=lambda p: len(new_file[p]), reverse=True)
+				for person in sorted_people[2:]:
 					del new_file[person]
 	return new_skeletons
 
