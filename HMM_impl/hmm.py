@@ -74,7 +74,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		print('Please generate tokens first with token_gen')
 		return
 
-	if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
+	if os.path.exists(pickle_audio_tok): # and os.path.exists(pickle_audio_feat):
 		with open(pickle_audio_tok, 'rb') as f:
 			audio_tokens = pickle.load(f)
 		with open(pickle_audio_feat, 'rb') as f:
@@ -148,7 +148,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			if len(recon_samples) >= 80:
 				break
 
-	fig_name = '{}_{}_{}_toksize_{}_stride_{}_posmotion'.format(CLUSTERING, motion_clusters, label, TOKEN_SIZE, MOTION_STRIDE)
+	fig_name = '{}_{}_{}_toksize_{}_stride_{}_{}'.format(CLUSTERING, motion_clusters, label, TOKEN_SIZE, MOTION_STRIDE, RUN_NAME)
 	file = 'viterbi_out_{}.txt'.format(fig_name)
 	with open(file, 'w+') as f:
 		print('Motion cluster \tTrue audio cluster \tPredicted audio cluster \tDistance to true center \tDistance to predicted center \tDistance between true and predicted', file=f)
