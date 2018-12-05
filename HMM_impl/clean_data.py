@@ -119,9 +119,9 @@ def transform_skeletons(skeletons):
 					new_file[person][frame] = {}
 					for joint, pos in joints.items():
 						new_file[person][frame][joint] = pos
-			# for person in list(new_file.keys()):
-			# 	if len(new_file[person]) < 0.1 * NUM_FRAMES:
-			# 		del new_file[person]
+			for person in list(new_file.keys()):
+				if len(new_file[person]) < 0.25 * NUM_FRAMES:
+					del new_file[person]
 			keys = new_file.keys()
 			if len(keys) > 2:
 				sorted_people = sorted(keys, key=lambda p: len(new_file[p]), reverse=True)

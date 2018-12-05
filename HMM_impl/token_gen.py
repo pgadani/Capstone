@@ -19,11 +19,11 @@ from hmm import *
 
 import hdbscan
 
-SKEL_DIR = '../skeletons_train'
-AUDIO_DIR = '../audio_train'
+SKEL_DIR = '../skeletons_cleaned'
+AUDIO_DIR = '../audio'
 
 LABEL = '*'
-CLUSTERING = 'k' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
+CLUSTERING = 'swing' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
@@ -38,7 +38,7 @@ N_MFCC = 4 # default 20
 N_TEMPO = 3 # don't know default
 
 N_MUSIC_CLUSTERS = 12
-N_MOTION_CLUSTERS = 30 # 12
+N_MOTION_CLUSTERS = 12 # 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
@@ -183,8 +183,6 @@ def cluster_motion(tokens, features, n_clusters):
 	return classifier, clusters, n_clusters
 
 
-# TODO FIX THE FFT LENGTHS HERE
-# returns a list of (source file, index, sample, features) tuples
 def load_audio(label='*', sample_time=None):
 	if not sample_time:
 		sample_time = TOKEN_SIZE / FRAME_RATE
@@ -347,17 +345,17 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		audio_cluster_counts[token.cluster] += 1
 	print('Audio Clusters', audio_cluster_counts)
 
-	audio_map = {(tok.filename, tok.index):tok for tok in audio_tokens}
-	transition_prob = transition_probability(audio_tokens, audio_clusters)
-	emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
-	motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
+	# audio_map = {(tok.filename, tok.index):tok for tok in audio_tokens}
+	# transition_prob = transition_probability(audio_tokens, audio_clusters)
+	# emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
+	# motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
 
-	print('Emissions:')
-	print_float_2d(emission_prob)
-	print('Transitions')
-	print_float_2d(transition_prob)
-	print('Motion Transitions')
-	print_float_2d(motion_transition_prob)
+	# print('Emissions:')
+	# print_float_2d(emission_prob)
+	# print('Transitions')
+	# print_float_2d(transition_prob)
+	# print('Motion Transitions')
+	# print_float_2d(motion_transition_prob)
 
 
 
@@ -399,6 +397,35 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	# 	json.dump(cluster_centers, f)
 
 
+	outfile = 'motion_tokens_{}.txt'.format(fig_name)
+	with open(outfile, 'w+') as f:
+		prev_token = None
+		for token in motion_tokens:
+			skel_diff = -1
+			if token.cluster != -1:
+				skel_center = cluster_centers[token.cluster]
+				diff = [token.skeletons[0][joint][i] - skel_center[joint][i] for joint in JOINTS for i in range(2)]
+				skel_diff = np.linalg.norm(diff)
+			# if prev_token is not None and prev_token.cluster != token.cluster:
+			if prev_token is not None and (prev_token.filename != token.filename or prev_token.person != token.person or prev_token.index + 1 != token.index):
+				print('', file=f)
+			print('Filename: {} \t Person: {} \t Index: {} \t Cluster: {} \t Initial distance: {}'.format(token.filename, token.person, token.index, token.cluster, skel_diff), file=f)
+			prev_token = token
+
+	outfile = 'motion_tokens_grouped_clusters_{}.txt'.format(fig_name)
+	with open(outfile, 'w+') as f:
+		prev_token = None
+		for token in sorted(motion_tokens, key=lambda tok: tok.cluster):
+			skel_diff = -1
+			if token.cluster != -1:
+				skel_center = cluster_centers[token.cluster]
+				diff = [token.skeletons[0][joint][i] - skel_center[joint][i] for joint in JOINTS for i in range(2)]
+				skel_diff = np.linalg.norm(diff)
+			# if prev_token is not None and prev_token.cluster != token.cluster:
+			if prev_token is not None and prev_token.cluster != token.cluster:
+				print('', file=f)
+			print('Filename: {} \t Person: {} \t Index: {} \t Cluster: {} \t Initial distance: {}'.format(token.filename, token.person, token.index, token.cluster, skel_diff), file=f)
+			prev_token = token
 
 	# for cluster in range(motion_clusters):
 	# 	if CLUSTERING == 'm' and cluster == len(motion_centers) - 1 and len(motion_centers) > 1:

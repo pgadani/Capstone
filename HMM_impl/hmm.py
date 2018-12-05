@@ -54,7 +54,6 @@ def transition_probability(audio_tokens, audio_clusters):
 	return probabilities
 
 
-# TODO CLEAN THIS AFTER FINISHING WITH FIXING TOKEN GEN
 def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	pickle_motion_tok = 'pickles/motion_tokens_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	pickle_motion_feat = 'pickles/motion_features_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
@@ -96,8 +95,6 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	for token in motion_tokens:
 		motion_cluster_counts[token.cluster] += 1
 
-	# motion_tokens.sort(key=lambda tok: (tok.filename, tok.person, tok.index))
-
 	print("AUDIO CLUSTER COUNTS", audio_cluster_counts)
 	print("MOTION CLUSTER COUNTS", motion_cluster_counts)
 
@@ -109,6 +106,8 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	print("AUDIO SAMPLES:")
 	for tok in audio_tokens:
 		print(tok)
+
+	audio_cluster_centers = audio_classifier.cluster_centers_
 
 	audio_map = {(tok.filename, tok.index):tok for tok in audio_tokens}
 	motion_tokens = [tok for tok in motion_tokens if (tok.filename, tok.index) in audio_map]
@@ -149,37 +148,47 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 			if len(recon_samples) >= 80:
 				break
 
-	for samp in recon_samples:
-		print(samp[0], samp[1])
-		recon_motion = list(filter(lambda tok: tok.filename == samp[0] and tok.person == samp[2], motion_tokens))
-		recon_motion.sort(key=lambda tok: tok.index)
+	fig_name = '{}_{}_{}_toksize_{}_stride_{}_posmotion'.format(CLUSTERING, motion_clusters, label, TOKEN_SIZE, MOTION_STRIDE)
+	file = 'viterbi_out_{}.txt'.format(fig_name)
+	with open(file, 'w+') as f:
+		print('Motion cluster \tTrue audio cluster \tPredicted audio cluster \tDistance to true center \tDistance to predicted center \tDistance between true and predicted', file=f)
+		for samp in recon_samples:
+			print(samp[0], samp[1], file=f)
+			recon_motion = list(filter(lambda tok: tok.filename == samp[0] and tok.person == samp[2], motion_tokens))
+			recon_motion.sort(key=lambda tok: tok.index)
 
-		expected_audio = [audio_map[(tok.filename, tok.index)] for tok in recon_motion]
-		priors = np.zeros(audio_clusters)
-		priors[expected_audio[0].cluster] = 1
+			expected_audio = [audio_map[(tok.filename, tok.index)] for tok in recon_motion]
+			priors = np.zeros(audio_clusters)
+			priors[expected_audio[0].cluster] = 1
 
-		if CLUSTERING == 'h':
-			features = [motion_features[tok.index, :] for tok in recon_motion]
-			motion_labels, _strengths = hdbscan.approximate_predict(motion_classifier, features)
-		else:
-			motion_labels = [tok.cluster for tok in recon_motion]
+			if CLUSTERING == 'h':
+				features = [motion_features[tok.index, :] for tok in recon_motion]
+				motion_labels, _strengths = hdbscan.approximate_predict(motion_classifier, features)
+			else:
+				motion_labels = [tok.cluster for tok in recon_motion]
 
-		result = viterbi(motion_labels, transition_prob, emission_prob, priors)
+			result = viterbi(motion_labels, transition_prob, emission_prob, priors)
 
-		# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
-		# result = hmm.predict(recon_motion_encoded)
+			# recon_motion_encoded = sklearn.preprocessing.label_binarize([tok.cluster for tok in recon_motion], classes=list(range(motion_clusters)))
+			# result = hmm.predict(recon_motion_encoded)
 
-		for tok, audio in zip(recon_motion, expected_audio):
-			if tok.filename != audio.filename or tok.index != audio.index:
-				print("MISMATCHED", tok.filename, tok.index, audio.filename, audio.index)
+			for tok, audio in zip(recon_motion, expected_audio):
+				if tok.filename != audio.filename or tok.index != audio.index:
+					print("MISMATCHED", tok.filename, tok.index, audio.filename, audio.index, file=f)
 
-		errors = 0
-		for i, cluster in enumerate(result):
-			print('{}\t{}\t{}'.format(recon_motion[i].cluster, expected_audio[i].cluster, cluster))
-			if cluster != expected_audio[i].cluster:
-				errors += 1
+			errors = 0
+			for i, (cluster, tok) in enumerate(zip(result, expected_audio)):
+				expected_center = audio_cluster_centers[expected_audio[i].cluster, :]
+				predicted_center = audio_cluster_centers[cluster, :]
 
-		print("ERROR: ", errors / len(result))
+				feat_index = audio_tokens.index(tok)
+				actual_feat = audio_features[feat_index, :]
+
+				print('{}\t{}\t{}\t{}\t{}\t{}'.format(recon_motion[i].cluster, expected_audio[i].cluster, cluster, np.linalg.norm(actual_feat - expected_center), np.linalg.norm(actual_feat - predicted_center), np.linalg.norm(expected_center - predicted_center)), file=f)
+				if cluster != expected_audio[i].cluster:
+					errors += 1
+
+			print("ERROR: ", errors / len(result), file=f)
 
 	print('Emissions:')
 	print_float_2d(emission_prob)
