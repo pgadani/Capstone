@@ -19,13 +19,14 @@ from hmm import *
 
 import hdbscan
 
-RUN_NAME = 'filter_files_recluster'
+RUN_NAME = 'unfiltered'
 
 SKEL_DIR = '../skeletons_cleaned'
 AUDIO_DIR = '../audio'
 
 LABEL = 'swing'
 CLUSTERING = 'k' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
+FILTER_CLUSTERS = False
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
@@ -312,34 +313,37 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	# 	print(token)
 
 	print('{} TOKENS WITH {} OUTLIERS:'.format(len(motion_tokens), len([m for m in motion_tokens if m.cluster == -1])))
-	print('Motion Clusters', [c for c in motion_cluster_counts if c > 0])
+	# print('Motion Clusters', [c for c in motion_cluster_counts if c > 0])
 
-	unique_files = [len({tok.filename for tok in motion_tokens if tok.cluster == i}) for i in range(motion_clusters)]
 
-	curr_fname = None
-	curr_person = -1
-	usable = False
-	valid = {}
-	curr_cluster = -1
-	for token in motion_tokens:
-		if token.filename != curr_fname or token.person != curr_person:
-			if curr_fname is not None:
-				if usable:
-					if curr_fname not in valid:
-						valid[curr_fname] = set()
-					valid[curr_fname].add(curr_person)
-			curr_fname = token.filename
-			curr_person = token.person
-			usable = False
-			curr_cluster = token.cluster
-		else:
-			if token.cluster != curr_cluster:
-				usable = True
 
-	print(len(motion_tokens))
-	motion_features_new = [f for f, m in zip(motion_features, motion_tokens) if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
-	motion_tokens = [m for m in motion_tokens if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
-	print(len(motion_tokens))
+	if FILTER_CLUSTERS:
+		unique_files = [len({tok.filename for tok in motion_tokens if tok.cluster == i}) for i in range(motion_clusters)]
+
+		curr_fname = None
+		curr_person = -1
+		usable = False
+		valid = {}
+		curr_cluster = -1
+		for token in motion_tokens:
+			if token.filename != curr_fname or token.person != curr_person:
+				if curr_fname is not None:
+					if usable:
+						if curr_fname not in valid:
+							valid[curr_fname] = set()
+						valid[curr_fname].add(curr_person)
+				curr_fname = token.filename
+				curr_person = token.person
+				usable = False
+				curr_cluster = token.cluster
+			else:
+				if token.cluster != curr_cluster:
+					usable = True
+
+		print(len(motion_tokens))
+		motion_features = [f for f, m in zip(motion_features, motion_tokens) if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
+		motion_tokens = [m for m in motion_tokens if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
+		print(len(motion_tokens))
 
 	pickle_motion_tok = 'pickles/motion_tokens_{}_toksize_{}_stride_{}_filtered.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	pickle_motion_feat = 'pickles/motion_features_{}_toksize_{}_stride_{}_filtered.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
@@ -349,7 +353,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		with open(pickle_motion_feat, 'wb+') as f:
 			pickle.dump(motion_features, f)
 
-	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features_new, motion_clusters)
+	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
 
 
 	# AUDIO
@@ -386,9 +390,10 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 
 	print(len(audio_tokens))
-	audio_featres = [f for (f, a) in zip(audio_features, audio_tokens) if a.filename in valid]
-	audio_tokens = [a for a in audio_tokens if a.filename in valid]
-	print(len(audio_tokens))
+	if FILTER_CLUSTERS:
+		audio_features = [f for (f, a) in zip(audio_features, audio_tokens) if a.filename in valid]
+		audio_tokens = [a for a in audio_tokens if a.filename in valid]
+		print(len(audio_tokens))
 
 	pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}_filtered.pkl'.format(label, TOKEN_SIZE)
 	pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}_filtered.pkl'.format(label, TOKEN_SIZE)
@@ -445,9 +450,9 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		# plt.show()
 		plt.close()
 
-	# cluster_centers_file = 'skeletons/cluster_centers_{}.txt'.format(fig_name)
-	# with open(cluster_centers_file, 'w+') as f:
-	# 	json.dump(cluster_centers, f)
+	cluster_centers_file = 'skeletons/cluster_centers_{}.txt'.format(fig_name)
+	with open(cluster_centers_file, 'w+') as f:
+		json.dump(cluster_centers, f)
 
 
 	outfile = 'motion_tokens_{}.txt'.format(fig_name)
