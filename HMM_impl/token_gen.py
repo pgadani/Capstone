@@ -19,21 +19,21 @@ from hmm import *
 
 import hdbscan
 
-RUN_NAME = 'unfiltered'
+RUN_NAME = 'single_skel_loop_filtered'
 
 SKEL_DIR = '../skeletons_cleaned'
 AUDIO_DIR = '../audio'
 
 LABEL = 'swing'
 CLUSTERING = 'k' # k for kmeans, m for meanshift, d for dbscan, h for hdbscan
-FILTER_CLUSTERS = False
+FILTER_CLUSTERS = True
 
 SAMPLE_RATE = 48000
 SAMPLE_LEN = 10  # seconds
 FRAME_RATE = 30  # per second
 
-TOKEN_SIZE = 10 # 20 # frames per token
-MOTION_STRIDE = 1 # 4 # default is 1
+TOKEN_SIZE = 1 # frames per token
+MOTION_STRIDE = 1  # default is 1
 MOTION_LENGTH = TOKEN_SIZE // MOTION_STRIDE
 
 N_CHROMA = 4 # default 12
@@ -41,7 +41,7 @@ N_MFCC = 4 # default 20
 N_TEMPO = 3 # don't know default
 
 N_MUSIC_CLUSTERS = 12
-N_MOTION_CLUSTERS = 12 # 12
+N_MOTION_CLUSTERS = 20 # 12
 
 NUM_SKELETON_POS = SAMPLE_LEN * FRAME_RATE
 JOINTS = ["head", "neck", "Rsho", "Relb", "Rwri", "Lsho", "Lelb", "Lwri", "Rhip", "Rkne", "Rank", "Lhip", "Lkne", "Lank"]
@@ -129,17 +129,17 @@ def generate_motion_tokens(skeletons):
 					for joint in JOINTS:
 						curr_skel[joint] = transform(positions[i + k][joint], offset, angle, scale)
 					token_skels.append(curr_skel)
-				for s in token_skels:
+				for s in token_skels[:-1]:
 					for j1 in JOINTS:
 						for j2 in JOINTS:
 							if j1 == j2:
 								continue
 							motion_features += [s[j1][i] - s[j2][i] for i in range(2)]
 				# MOTION
-				for s, n in zip(token_skels[:-1], token_skels[1:]):
-					for j1 in JOINTS:
-						for j2 in JOINTS:
-							motion_features += [s[j1][i] - n[j2][i] for i in range(2)]
+				# for s, n in zip(token_skels[:-1], token_skels[1:]):
+				# 	for j1 in JOINTS:
+				# 		for j2 in JOINTS:
+				# 			motion_features += [s[j1][i] - n[j2][i] for i in range(2)]
 				# # DIFF FROM START
 				# for s in token_skels[1:]:
 				# 	s0 = token_skels[0]
@@ -157,11 +157,14 @@ def generate_motion_tokens(skeletons):
 
 	# features = preprocessing.normalize(np.array(all_features), norm='l2', axis=0)
 
-	features = preprocessing.scale(np.array(all_features))
+	scaler = preprocessing.StandardScaler()
+	features = scaler.fit_transform(np.array(all_features))
+	print(features.shape)
 
 	pca = PCA(n_components=.95)
 	features = pca.fit_transform(features)
-	return tokens, features
+	print(features.shape)
+	return tokens, features, pca, scaler
 
 
 def cluster_motion(tokens, features, n_clusters):
@@ -261,22 +264,24 @@ def dist(p1, p2):
 	return ((p1[0] - p2[0])**2 + (p1[1] + p2[1])**2)**.5
 
 
-def draw_pose(skel, color='k', subplt=None):
-	if subplt:
-		subplt.plot(skel['head'][0], -skel['head'][1], 'o')
-		subplt.axis('equal')
-	else:
-		plt.plot(skel['head'][0], -skel['head'][1], 'o')
-	# head = plt.Circle((skel['head'][0], -skel['head'][1]), (skel['head'][0]**2 + skel['head'][1]**2)**.5, color=color)
-	# plt.gcf().gca().add_artist(head)
+def draw_pose(skel, color='k', subplt=None, xscale=1, yscale=1, offset=None, draw_head=True):
+	if offset is None:
+		offset = (0,0)
+	skel_transformed = {joint:(p[0]*xscale+offset[0], p[1]*yscale+offset[1]) for joint,p in skel.items()}
+	if draw_head:
+		if subplt:
+			subplt.plot(skel_transformed['head'][0], -skel_transformed['head'][1], 'o')
+			subplt.axis('equal')
+		else:
+			plt.plot(skel_transformed['head'][0], -skel['head'][1], 'o')
 	joints_show = JOINTS_DISPLAY
 	for j1, j2 in zip(joints_show[:-1], joints_show[1:]):
-		p1 = skel[j1]
-		p2 = skel[j2]
+		p1 = skel_transformed[j1]
+		p2 = skel_transformed[j2]
 		if subplt:
-			subplt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color)
+			subplt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color=color)
 		else:
-			plt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color)
+			plt.plot([p1[0], p2[0]], [-p1[1], -p2[1]], color=color)
 
 
 
@@ -285,23 +290,35 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 	# MOTION
 	pickle_motion_tok = 'pickles/motion_tokens_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	pickle_motion_feat = 'pickles/motion_features_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
+	pickle_motion_pca = 'pickles/motion_pca_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
+	pickle_motion_scaler = 'pickles/motion_scaler_{}_toksize_{}_stride_{}.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	motion_tokens = None
 	motion_features = None
+	motion_pca = None
+	motion_scaler = None
 	if pickle_data:
-		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat):
+		if os.path.exists(pickle_motion_tok) and os.path.exists(pickle_motion_feat) and os.path.exists(pickle_motion_pca) and os.path.exists(pickle_motion_scaler):
 			with open(pickle_motion_tok, 'rb') as f:
 				motion_tokens = pickle.load(f)
 			with open(pickle_motion_feat, 'rb') as f:
 				motion_features = pickle.load(f)
+			with open(pickle_motion_pca, 'rb') as f:
+				motion_pca = pickle.load(f)
+			with open(pickle_motion_scaler, 'rb') as f:
+				motion_scaler = pickle.load(f)
 
-	if motion_tokens is None or motion_features is None: # skeletons is None or
+	if motion_tokens is None or motion_features is None or motion_pca is None or motion_scaler is None:
 		skeletons = load_skeletons(label=label)
-		motion_tokens, motion_features = generate_motion_tokens(skeletons)
+		motion_tokens, motion_features, motion_pca, motion_scaler = generate_motion_tokens(skeletons)
 		if pickle_data:
 			with open(pickle_motion_tok, 'wb+') as f:
 				pickle.dump(motion_tokens, f)
 			with open(pickle_motion_feat, 'wb+') as f:
 				pickle.dump(motion_features, f)
+			with open(pickle_motion_pca, 'wb+') as f:
+				pickle.dump(motion_pca, f)
+			with open(pickle_motion_scaler, 'wb+') as f:
+				pickle.dump(motion_scaler, f)
 
 	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
 	print(motion_clusters)
@@ -318,32 +335,40 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 
 
 	if FILTER_CLUSTERS:
-		unique_files = [len({tok.filename for tok in motion_tokens if tok.cluster == i}) for i in range(motion_clusters)]
+		refilter = True
+		while refilter:
+			unique_files = [len({tok.filename for tok in motion_tokens if tok.cluster == i}) for i in range(motion_clusters)]
 
-		curr_fname = None
-		curr_person = -1
-		usable = False
-		valid = {}
-		curr_cluster = -1
-		for token in motion_tokens:
-			if token.filename != curr_fname or token.person != curr_person:
-				if curr_fname is not None:
-					if usable:
-						if curr_fname not in valid:
-							valid[curr_fname] = set()
-						valid[curr_fname].add(curr_person)
-				curr_fname = token.filename
-				curr_person = token.person
-				usable = False
-				curr_cluster = token.cluster
+			curr_fname = None
+			curr_person = -1
+			usable = False
+			valid = {}
+			curr_cluster = -1
+			for token in motion_tokens:
+				if token.filename != curr_fname or token.person != curr_person:
+					if curr_fname is not None:
+						if usable:
+							if curr_fname not in valid:
+								valid[curr_fname] = set()
+							valid[curr_fname].add(curr_person)
+					curr_fname = token.filename
+					curr_person = token.person
+					usable = False
+					curr_cluster = token.cluster
+				else:
+					if token.cluster != curr_cluster:
+						usable = True
+
+			orig_len = len(motion_tokens)
+			print(orig_len)
+			motion_features = [f for f, m in zip(motion_features, motion_tokens) if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
+			motion_tokens = [m for m in motion_tokens if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
+			filt_len = len(motion_tokens)
+			print(filt_len)
+			if filt_len >= 0.95 * orig_len:
+				refilter = False
 			else:
-				if token.cluster != curr_cluster:
-					usable = True
-
-		print(len(motion_tokens))
-		motion_features = [f for f, m in zip(motion_features, motion_tokens) if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
-		motion_tokens = [m for m in motion_tokens if m.filename in valid and m.person in valid[m.filename] and unique_files[m.cluster] > 1]
-		print(len(motion_tokens))
+				motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
 
 	pickle_motion_tok = 'pickles/motion_tokens_{}_toksize_{}_stride_{}_filtered.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
 	pickle_motion_feat = 'pickles/motion_features_{}_toksize_{}_stride_{}_filtered.pkl'.format(label, TOKEN_SIZE, MOTION_STRIDE)
@@ -353,65 +378,64 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		with open(pickle_motion_feat, 'wb+') as f:
 			pickle.dump(motion_features, f)
 
-	motion_classifier, motion_labels, motion_clusters = cluster_motion(motion_tokens, motion_features, motion_clusters)
 
 
 	# AUDIO
-	pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
-	pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
-	pickle_audio_feat_full = 'pickles/audio_features_full_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
-	audio_tokens = None
-	audio_features = None
-	audio_features_full = None
-	if pickle_data:
-		if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
-			with open(pickle_audio_tok, 'rb') as f:
-				audio_tokens = pickle.load(f)
-			with open(pickle_audio_feat, 'rb') as f:
-				audio_features = pickle.load(f)
-			with open(pickle_audio_feat_full, 'rb') as f:
-				audio_features_full = pickle.load(f)
+	# pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
+	# pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
+	# pickle_audio_feat_full = 'pickles/audio_features_full_{}_toksize_{}.pkl'.format(label, TOKEN_SIZE)
+	# audio_tokens = None
+	# audio_features = None
+	# audio_features_full = None
+	# if pickle_data:
+	# 	if os.path.exists(pickle_audio_tok) and os.path.exists(pickle_audio_feat):
+	# 		with open(pickle_audio_tok, 'rb') as f:
+	# 			audio_tokens = pickle.load(f)
+	# 		with open(pickle_audio_feat, 'rb') as f:
+	# 			audio_features = pickle.load(f)
+	# 		with open(pickle_audio_feat_full, 'rb') as f:
+	# 			audio_features_full = pickle.load(f)
 
-	if audio_tokens is None or audio_features is None or audio_features_full is None:
-		audio_tokens, audio_features, audio_features_full = load_audio(label=label)
-	if pickle_data:
-		with open(pickle_audio_tok, 'wb+') as f:
-			pickle.dump(audio_tokens, f)
-		with open(pickle_audio_feat, 'wb+') as f:
-			pickle.dump(audio_features, f)
-		with open(pickle_audio_feat_full, 'wb+') as f:
-			pickle.dump(audio_features_full, f)
+	# if audio_tokens is None or audio_features is None or audio_features_full is None:
+	# 	audio_tokens, audio_features, audio_features_full = load_audio(label=label)
+	# if pickle_data:
+	# 	with open(pickle_audio_tok, 'wb+') as f:
+	# 		pickle.dump(audio_tokens, f)
+	# 	with open(pickle_audio_feat, 'wb+') as f:
+	# 		pickle.dump(audio_features, f)
+	# 	with open(pickle_audio_feat_full, 'wb+') as f:
+	# 		pickle.dump(audio_features_full, f)
 
-	audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_tokens, audio_features, audio_clusters)
-	audio_cluster_counts = np.zeros(audio_clusters)
-	for token in audio_tokens:
-		audio_cluster_counts[token.cluster] += 1
-	print('Audio Clusters', audio_cluster_counts)
+	# audio_classifier, audio_labels, audio_clusters = cluster_audio(audio_tokens, audio_features, audio_clusters)
+	# audio_cluster_counts = np.zeros(audio_clusters)
+	# for token in audio_tokens:
+	# 	audio_cluster_counts[token.cluster] += 1
+	# print('Audio Clusters', audio_cluster_counts)
 
 
-	print(len(audio_tokens))
-	if FILTER_CLUSTERS:
-		audio_features = [f for (f, a) in zip(audio_features, audio_tokens) if a.filename in valid]
-		audio_tokens = [a for a in audio_tokens if a.filename in valid]
-		print(len(audio_tokens))
+	# print(len(audio_tokens))
+	# if FILTER_CLUSTERS:
+	# 	audio_features = [f for (f, a) in zip(audio_features, audio_tokens) if a.filename in valid]
+	# 	audio_tokens = [a for a in audio_tokens if a.filename in valid]
+	# 	print(len(audio_tokens))
 
-	pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}_filtered.pkl'.format(label, TOKEN_SIZE)
-	pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}_filtered.pkl'.format(label, TOKEN_SIZE)
-	if pickle_data:
-		with open(pickle_audio_tok, 'wb+') as f:
-			pickle.dump(audio_tokens, f)
-		with open(pickle_audio_feat, 'wb+') as f:
-			pickle.dump(audio_features, f)
+	# pickle_audio_tok = 'pickles/audio_tokens_{}_toksize_{}_filtered.pkl'.format(label, TOKEN_SIZE)
+	# pickle_audio_feat = 'pickles/audio_features_{}_toksize_{}_filtered.pkl'.format(label, TOKEN_SIZE)
+	# if pickle_data:
+	# 	with open(pickle_audio_tok, 'wb+') as f:
+	# 		pickle.dump(audio_tokens, f)
+	# 	with open(pickle_audio_feat, 'wb+') as f:
+	# 		pickle.dump(audio_features, f)
 
-	audio_map = {(tok.filename, tok.index):tok for tok in audio_tokens}
-	transition_prob = transition_probability(audio_tokens, audio_clusters)
-	emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
+	# audio_map = {(tok.filename, tok.index):tok for tok in audio_tokens}
+	# transition_prob = transition_probability(audio_tokens, audio_clusters)
+	# emission_prob = emission_probability(audio_map, audio_clusters, motion_tokens, motion_clusters)
 	motion_transition_prob = transition_probability(motion_tokens, motion_clusters)
 
-	print('Emissions:')
-	print_float_2d(emission_prob)
-	print('Transitions')
-	print_float_2d(transition_prob)
+	# print('Emissions:')
+	# print_float_2d(emission_prob)
+	# print('Transitions')
+	# print_float_2d(transition_prob)
 	print('Motion Transitions')
 	print_float_2d(motion_transition_prob)
 
@@ -433,6 +457,7 @@ def main(pickle_data=True, label='*', audio_clusters=25, motion_clusters=25):
 		curr_draw = 0
 		plt.figure(figsize=(8, 10))
 		plt.axis('equal')
+		random.shuffle(cluster_skels)
 		for i, skel in enumerate(cluster_skels):
 			if i >= max_draw:
 				break
